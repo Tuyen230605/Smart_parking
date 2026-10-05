@@ -1,5 +1,5 @@
-# AWS development environment
+# Hạ tầng AWS
 
-Môi trường dev dự kiến gồm AWS IoT Core, IoT Rules, backend (Lambda/API hoặc dịch vụ tương đương), database và Amazon SES. Chỉ bật SMS SNS sau khi kiểm tra khả năng gửi đến quốc gia đích và dự toán chi phí.
+Tài liệu triển khai ở [docs/aws-deployment.md](../../docs/aws-deployment.md). MVP dùng IoT Core, Lambda/API Gateway, DynamoDB, SES, Cognito, S3/CloudFront, EventBridge Scheduler, CloudWatch và Budgets. Chưa có template IaC trong thư mục này.
 
-Không commit certificate/private key hoặc access key. Dùng IAM role cho backend; policy IoT giới hạn topic theo từng thiết bị; tách dev/prod và đặt budget cảnh báo.
+Thiết bị có certificate/policy riêng; backend dùng IAM role. Không commit private key, access key, email khách hay ảnh/biển số thật. Cấu hình cảnh báo chi phí trước khi chạy demo.

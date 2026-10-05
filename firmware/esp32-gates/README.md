@@ -1,5 +1,5 @@
-# ESP32 điều khiển cổng
+# ESP32 cổng: hai cần chắn và OLED
 
-Firmware điều khiển cần vào và cần ra, đọc trạng thái công tắc hành trình, nhận lệnh có thời hạn và báo telemetry theo [hợp đồng MQTT](../../docs/mqtt-contract.md).
+Board `gate-01` nhận hai luồng riêng: `gate_command` cho servo `ENTRY`/`EXIT`, `display_command` cho OLED. Gửi ACK/trạng thái theo [MQTT v1](../../docs/mqtt-contract.md). Mỗi command có ID và thời hạn; bỏ lệnh trùng/quá hạn/sai đích.
 
-Tách driver cơ cấu khỏi logic MQTT. Dùng nguồn riêng phù hợp cho servo/motor; nối mass chung theo thiết kế điện; không cấp tải motor từ GPIO. Xác minh hành trình, timeout, nút dừng và trạng thái khi mất mạng trước demo.
+Hai servo dùng GPIO PWM riêng và nguồn 5 V riêng có mass chung. OLED chỉ hiện ô/đường ngắn, phí và lỗi; QR lớn hiển thị trên kiosk laptop/tablet. Phần cứng MVP không có cảm biến xe qua cổng, nên quản trị xác nhận xe đã ra qua web.

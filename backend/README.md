@@ -1,5 +1,5 @@
-# Backend
+# Backend nghiệp vụ
 
-Xử lý sự kiện Pi và cảm biến; quản lý phiên đỗ; gán ô bằng dữ liệu trạng thái mới nhất; phát lệnh cần chắn; gửi chỉ dẫn và thông báo.
+AWS Lambda nhận sự kiện IoT Core và API web, quản lý phiên/ô, tạo QR token, gán ô bằng ghi có điều kiện, tính phí mô phỏng, phát lệnh cần và gọi Amazon SES. Dữ liệu ở DynamoDB. Xem [kiến trúc](../docs/architecture.md), [use case](../docs/use-cases.md), [API](../docs/api-contract.md).
 
-Các thao tác cần idempotent theo `event_id`/`command_id`. Chỉ mở cổng sau khi kiểm tra nghiệp vụ. Tách adapter local/mock khỏi adapter AWS IoT, SES và SNS/nhà cung cấp SMS.
+Backend là nơi duy nhất phát lệnh servo, không coi ACK mở cần là xác nhận xe qua cổng. Email chỉ thuộc lượt hiện tại; không lập bảng liên kết biển số→email lâu dài. Mọi sự kiện/lệnh/API mutation xử lý retry an toàn bằng ID.

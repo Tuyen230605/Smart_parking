@@ -1,7 +1,5 @@
-# Raspberry Pi vision
+# Raspberry Pi 5: camera và nhận diện
 
-Module camera, phát hiện thẻ màu, OCR biển số và publish sự kiện theo [hợp đồng MQTT](../../docs/mqtt-contract.md).
+Một camera chụp cả hai ROI `ENTRY`/`EXIT`. Thẻ xanh chỉ hợp lệ ở làn vào, thẻ đỏ chỉ hợp lệ ở làn ra. Pi phát hiện màu ổn định qua nhiều frame, OCR biển số tại chỗ và publish `vehicle_detected` theo [MQTT v1](../../docs/mqtt-contract.md). OCR yếu/sai làn vẫn gửi sự kiện để backend chuyển quản trị xác nhận; Pi không tự mở cần.
 
-Đầu ra tối thiểu: `event_id`, `type`, `lane_id`, `card_color`, `plate`, `plate_confidence`, `captured_at`.
-
-Không ghi credential vào mã nguồn. Khi phát triển, dùng video/ảnh fixture; cấu hình camera và broker qua biến môi trường hoặc file cấu hình local bị gitignore.
+MVP xử lý ảnh trong RAM, không upload ảnh cloud. Cần có bộ ảnh/video fixture giả lập và báo cáo góc camera, ánh sáng, confidence, tỷ lệ đọc đúng. Một camera không đủ rõ hai làn thì demo tuần tự từng làn với cùng schema.

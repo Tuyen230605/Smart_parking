@@ -1,48 +1,56 @@
-# Kế hoạch mô phỏng và tích hợp
+# Mô phỏng và nghiệm thu đầu cuối
 
-## Mục đích
+Mục tiêu là dựng đủ hành vi của **18 ô với một cảm biến thật và 17 nút**, hai làn qua một camera và hai cần qua một ESP32. Kịch bản liên kết với [use case](use-cases.md); payload lấy từ [MQTT contract](mqtt-contract.md) và [API contract](api-contract.md).
 
-Kiểm tra hợp đồng message và nghiệp vụ vào/ra/gán ô trước khi nhóm có đủ phần cứng. Mô phỏng không thay thế kiểm tra điện, hành trình cơ khí và an toàn của cần chắn.
+## 1. Các chế độ chạy
 
-## Các mức mô phỏng
+| Chế độ | Thiết bị | Mục đích |
+|---|---|---|
+| Mock local | Script thay Pi/gate/slots, broker MQTT local | Phát triển backend/web không cần sa bàn/AWS |
+| AWS dev | Mock device hoặc một số thiết bị thật → IoT Core | Chốt certificate, topic, IoT Rule và Lambda |
+| Sa bàn đầy đủ | Pi/camera, ESP gate/servo/OLED, ESP slots/ToF/nút | Nghiệm thu hành vi phần cứng, email và web |
 
-1. **Unit:** kiểm thử logic phân loại màu, parser biển số, debounce cảm biến, chọn ô và chuyển trạng thái phiên đỗ bằng fixture.
-2. **Device mock:** script giả lập Pi/ESP32 publish-subscribe MQTT; cho phép cấu hình biển số, trạng thái ô, độ trễ, mất kết nối và confidence.
-3. **System integration:** backend, broker local hoặc AWS dev IoT, database dev và dashboard cùng chạy một kịch bản đầu-cuối.
-4. **Hardware-in-the-loop:** thay mock bằng camera/Pi/ESP32 thật; bắt đầu bằng servo không tải và kiểm tra hành trình trước khi gắn cần.
+Mock phải phát **cùng schema v1** và **cùng device_id** như thiết bị thật; không làm API riêng cho demo. Có thể dùng biển số giả trong fixture để không cần dữ liệu thật.
 
-## Máy trạng thái nghiệp vụ
+## 2. Bố trí đầu vào
 
-```text
-ARRIVAL_DETECTED -> VALIDATING -> SLOT_ASSIGNED -> GATE_OPEN_REQUESTED
- -> ENTERED_WAITING_FOR_SLOT -> PARKED -> EXIT_REQUESTED -> EXIT_CONFIRMED -> CLOSED
-```
+- Dán hai vùng ROI `ENTRY` và `EXIT` trên mặt bãi trước camera. Thẻ xanh chỉ ở vùng vào, thẻ đỏ chỉ ở vùng ra.
+- F1-A1 có xe mô hình đặt/nhấc khỏi cảm biến ToF.
+- 17 nút dán nhãn B1…B17 theo bảng ở [parking-layout.md](parking-layout.md). Một nhấn đảo trạng thái; LED/sơ đồ web thể hiện trạng thái sau debounce.
+- Kiosk là laptop/tablet hiện QR động; OLED hiện chỉ dẫn/phí ngắn. Màn hình admin trên cùng web app nhưng tài khoản `ADMIN`.
 
-Nhánh xử lý: `VALIDATION_REQUIRED` khi OCR thấp; `FULL` khi hết chỗ; `ERROR` khi thiết bị/cảm biến lỗi; `EXPIRED` khi xe không đến trong khoảng thời gian đặt trước.
+## 3. Kịch bản nghiệm thu
 
-## Kịch bản chấp nhận
+| ID | Thiết lập và thao tác | Điều kiện đạt |
+|---|---|---|
+| SIM-01 | Thẻ xanh, biển số giả rõ, còn F1-A1 | Tạo đúng một phiên; giữ F1-A1; cần vào mở; OLED/kiosk chỉ F1-A1 |
+| SIM-02 | Quét QR, không nhập email | Web hiển thị lộ trình; không gọi SES |
+| SIM-03 | Quét QR, nhập email hợp lệ và đồng ý | SES chấp nhận một email của đúng phiên; gửi lặp bị chặn; lượt sau không tự dùng email cũ |
+| SIM-04 | Đặt xe trên ToF F1-A1 | F1-A1 chuyển `OCCUPIED`, phiên chuyển `PARKED`, nguồn hiện “sensor” |
+| SIM-05 | Bấm B1 rồi bấm lại | F1-A2 lần lượt có xe/trống, nguồn “button”; sau reset vẫn đúng trạng thái đã lưu NVS |
+| SIM-06 | Bấm 17 nút thành occupied, F1-A1 cũng occupied | Báo bãi đầy, không mở cần vào |
+| SIM-07 | Thẻ đỏ đúng làn, có phiên đỗ | Hiện phí dự kiến; quản trị ghi thu tiền; chỉ cần ra mở; xác nhận qua cổng mới đóng phiên |
+| SIM-08 | OCR thấp hoặc màu thẻ sai làn | `MANUAL_REVIEW`, không mở cần tự động |
+| SIM-09 | Hai xe cùng tranh một ô | Ghi điều kiện chỉ giữ cho một phiên, phiên kia thử ô kế tiếp |
+| SIM-10 | Replay cùng `event_id`/`command_id` | Không thêm phiên, gửi email hoặc chạy servo lần hai |
+| SIM-11 | Ngắt ESP slots > 90 giây | Các ô chuyển `UNKNOWN`, backend không gán dựa trên snapshot cũ |
+| SIM-12 | Ngắt Wi-Fi ESP gate, phát lệnh cũ rồi nối lại | Lệnh đã quá hạn bị bỏ; servo không mở |
+| SIM-13 | Không đến ô được giữ trong 5 phút | Phiên hết hạn; ô giải phóng khi cảm biến vẫn trống |
+| SIM-14 | SES lỗi hoặc sandbox chặn email | Web vẫn chỉ đường; admin thấy `FAILED`; không rollback phiên |
+| SIM-15 | Token QR hết 15 phút hoặc dùng lại để gửi email | Trả `410 TOKEN_EXPIRED` hoặc `409 EMAIL_ALREADY_SENT` |
+| SIM-16 | Dữ liệu định danh đã đến hạn 10 ngày | API không trả biển số/email/token, job purge dọn dữ liệu |
 
-| ID | Điều kiện | Hành động | Tiêu chí đạt |
-|---|---|---|---|
-| SIM-01 | Có ít nhất một ô trống | Gửi xe vào hợp lệ | Chọn đúng một ô, cần vào nhận một lệnh, thông báo có ô và hướng dẫn |
-| SIM-02 | Không còn ô | Gửi xe vào | Không gán ô; không phát lệnh mở tự động; lưu lý do bãi đầy |
-| SIM-03 | Có phiên đỗ theo biển số | Gửi yêu cầu xe ra | Tìm đúng phiên, mở cần ra, đóng phiên sau xác nhận |
-| SIM-04 | OCR thấp | Gửi sự kiện vào/ra | Chuyển xác nhận thủ công, không ghép nhầm xe |
-| SIM-05 | Message gửi lại cùng ID | Replay event/command | Không tạo phiên trùng hoặc thực hiện lệnh trùng |
-| SIM-06 | Cảm biến đảo trạng thái nhanh | Phát occupied/empty xen kẽ | Debounce giữ trạng thái ổn định; backend ghi nhận dữ liệu cuối hợp lệ |
-| SIM-07 | Mất Wi-Fi/MQTT | Ngắt broker rồi nối lại | Thiết bị báo offline/reconnect; lệnh cũ hết hạn không được thực hiện |
-| SIM-08 | Ô vừa được xe khác nhận | Gửi hai yêu cầu đồng thời | Transaction/lock chỉ cho tối đa một xe nhận cùng một ô |
+## 4. Số liệu nên báo cáo
 
-## Chỉ số demo nên ghi lại
+- Tỷ lệ đúng màu thẻ và biển số trên tập ảnh/video giả lập đủ sáng, thiếu sáng, hai góc làn. Ghi số mẫu và cách tính; không chỉ báo phần trăm.
+- Độ trễ từ Pi event đến gán ô, đến OLED/kiosk, đến ESP ACK; đo trung vị và lớn nhất trên nhiều lượt.
+- Tỷ lệ phát hiện đúng của ToF F1-A1 trong các lần đặt/nhấc xe; số lần nút bounce gây đổi sai sau debounce.
+- Chi phí AWS theo hóa đơn thực tế và giả định traffic; tách phần AWS với phần cứng.
 
-- Tỷ lệ phát hiện đúng xanh/đỏ và tỷ lệ OCR đúng trên bộ ảnh/video của nhóm.
-- Thời gian từ nhận diện đến phản hồi gán ô; thời gian từ lệnh đến xác nhận cần.
-- Độ trễ cập nhật ô và tỷ lệ false occupied/false empty.
-- Số trường hợp xử lý đúng khi replay, mất kết nối, dữ liệu stale hoặc OCR thấp.
+## 5. Bàn giao giữa 4 người
 
-## Bàn giao giữa thành viên
-
-- Pi và mock dùng cùng payload sự kiện trong `mqtt-contract.md`.
-- Hai firmware dùng cùng quy ước `device_id`, timestamp, ID lệnh và mã lỗi.
-- Backend cung cấp mock endpoint/fixture để frontend và nhóm cảm biến phát triển độc lập.
-- Mỗi bản demo có cấu hình chạy, ảnh/video fixture được phép chia sẻ, và hướng dẫn reset trạng thái.
+1. Người Pi cung cấp fixture `vehicle_detected` hợp lệ/sai và ghi chú confidence.
+2. Người ESP gate cung cấp log `gate_telemetry` và `display_telemetry` cho cả hai cần.
+3. Người ESP slots cung cấp 18 ID và snapshot đầy đủ sau boot/reconnect.
+4. Người backend/web cung cấp tài khoản demo admin/kiosk, API contract, bảng giá và trạng thái email SES.
+5. Cả nhóm chạy SIM-01 → SIM-16 và quay video ít nhất một luồng vào/ra liên tục.
