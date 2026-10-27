@@ -1,0 +1,16 @@
+# sudo cp pi-vision.service /etc/systemd/system/ && sudo systemctl enable --now pi-vision
+# Sửa User và đường dẫn cho đúng máy trước khi cài.
+[Unit]
+Description=Smart parking vision pi-01
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/Cloud-Course/edge/raspberry-pi-vision
+ExecStart=/home/pi/venv/bin/python main.py --config config.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

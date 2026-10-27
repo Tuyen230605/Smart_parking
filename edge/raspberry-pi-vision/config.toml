@@ -1,0 +1,55 @@
+# Cấu hình pi-01. Tọa độ ROI theo tỉ lệ khung hình: [x, y, rộng, cao] trong khoảng 0–1.
+# Dùng trang preview (http://pi-01.local:8000) để click lấy tọa độ và giá trị HSV khi hiệu chỉnh.
+
+[device]
+site_id = "site-01"
+device_id = "pi-01"
+firmware_version = "0.1.0"
+
+[camera]
+# "picamera2" trên Pi; số webcam ("0"); hoặc đường dẫn ảnh/video fixture.
+source = "picamera2"
+width = 2304
+height = 1296
+fps = 10
+
+[mqtt]
+enabled = true
+# Mosquitto local khi phát triển. AWS IoT Core: host = "<prefix>-ats.iot.<region>.amazonaws.com",
+# port = 8883, tls = true và trỏ ba file cert nằm NGOÀI repo.
+host = "localhost"
+port = 1883
+tls = false
+ca_cert = "/etc/parking/certs/AmazonRootCA1.pem"
+cert = "/etc/parking/certs/pi-01.cert.pem"
+key = "/etc/parking/certs/pi-01.private.key"
+status_interval_s = 30
+
+[detection]
+stable_frames = 5            # số frame liên tiếp cùng màu trước khi đọc biển số
+clear_frames = 10            # số frame không thấy thẻ để coi như xe đã rời làn
+ocr_attempts = 3             # số lần OCR tối đa cho một xe, lấy kết quả tốt nhất
+dedupe_window_s = 5          # không phát lại cùng xe/làn trong cửa sổ này
+min_card_ratio = 0.04        # tỉ lệ điểm ảnh màu thẻ tối thiểu trong ROI làn
+plate_confidence_threshold = 0.85
+
+[lanes.ENTRY]
+roi = [0.0, 0.0, 0.5, 1.0]
+# Vùng biển số tùy chọn; bỏ trống thì OCR toàn bộ ROI làn.
+plate_roi = []
+
+[lanes.EXIT]
+roi = [0.5, 0.0, 0.5, 1.0]
+plate_roi = []
+
+# Ngưỡng HSV kiểu OpenCV (H 0–180, S/V 0–255). Đỏ cần hai khoảng vì nằm ở hai đầu vòng H.
+[colors.GREEN]
+ranges = [[[40, 80, 60], [85, 255, 255]]]
+
+[colors.RED]
+ranges = [[[0, 110, 70], [10, 255, 255]], [[170, 110, 70], [180, 255, 255]]]
+
+[preview]
+enabled = true
+port = 8000
+width = 960

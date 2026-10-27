@@ -22,14 +22,16 @@ Demo một lượt xe vào, nhận ô/đường qua OLED và QR, tùy chọn nh�
 
 ## 3. Phân công 4 người
 
-| Người | Chủ trì | Việc và sản phẩm bàn giao |
-|---|---|---|
-| 1 — Pi/vision + giao diện khách | Camera và AI tại biên | Lắp camera nhìn hai ROI, nhận màu thẻ, OCR biển số, confidence/dedupe; publish `vehicle_detected`; trang QR/form email của khách và video fixture |
-| 2 — ESP cổng + giao diện cổng | Hai cần chắn + OLED | Đấu nguồn/servo, firmware `gate-01`, lệnh đúng cần/ACK, chỉ ô/phí trên OLED; trang kiosk QR và thao tác cổng trên web |
-| 3 — ESP ô + sơ đồ bãi | Một cảm biến + 17 nút | Sa bàn 2 tầng, I²C expander, map 18 ô, debounce/NVS, snapshot MQTT; sơ đồ 18 ô trên web, mock thiết bị và kịch bản |
-| 4 — AWS/backend + quản trị | Nghiệp vụ và hạ tầng | IoT Core, Lambda/API, DynamoDB, SES, Cognito, gán ô/tính phí/token QR, trang quản trị và hướng dẫn deploy |
+Checklist chi tiết, quy tắc Git và thứ tự làm: [docs/team-tasks.md](docs/team-tasks.md).
 
-**Tích hợp chung:** người 1 và 4 chốt `vision event` cùng API trang khách; người 2 và 4 chốt gate/display commands cùng API kiosk; người 3 và 4 chốt slot state cùng API sơ đồ. Cả nhóm làm demo đầu cuối, kiểm thử và sửa hợp đồng khi cần. Giao diện là một web app chung; mỗi người chịu trách nhiệm phần mình và dùng cùng API v1.
+| Người | Thiết bị | Trang trong web app chung | Việc và sản phẩm bàn giao |
+|---|---|---|---|
+| 1 — Pi/vision + khách | Pi 5 + camera | `/s/:token` (`web/src/pages/guest/`) | Hai ROI, màu thẻ, OCR, dedupe; publish `vehicle_detected`; trang QR/email của khách; fixture và báo cáo độ chính xác |
+| 2 — ESP cổng + kiosk | `gate-01`: 2 servo + OLED | `/kiosk` (`web/src/pages/kiosk/`) | Firmware lệnh đúng cần/ACK/OLED, mock gate; kiosk QR lớn và component điều khiển cổng cho admin |
+| 3 — ESP ô + sơ đồ | `slots-01`: ToF + 17 nút | `/` (`web/src/pages/public/`, `FloorMap`) | Sa bàn, I²C expander, debounce/NVS, snapshot; mock slots; sơ đồ 18 ô công khai |
+| 4 — AWS/backend + quản trị | — | `/admin` (`web/src/pages/admin/`, `auth.ts`) | IoT Core, Lambda/API, DynamoDB, SES, Cognito, gán ô/phí/token QR; cert thiết bị; trang quản trị; deploy web |
+
+**Tích hợp chung:** thiết bị nói chuyện với AWS qua [MQTT v1](docs/mqtt-contract.md); web nói chuyện với backend qua [API v1](docs/api-contract.md). Web là **một app duy nhất** ([web/](web/README.md), Vite + React + TypeScript): dùng chung lớp `src/api` (có API giả để làm trước khi backend xong), chung layout và CSS, mỗi người sở hữu một thư mục trang.
 
 ## 4. Mốc 6 tuần
 

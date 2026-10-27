@@ -1,0 +1,5 @@
+# Trên Pi: picamera2 và opencv cài bằng apt; tạo venv với --system-site-packages.
+paho-mqtt>=2.0
+rapidocr_onnxruntime>=1.3
+# picamera2/simplejpeg của apt build với numpy 1.x
+numpy<2
