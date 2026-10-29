@@ -3,7 +3,7 @@
 Thiết kế ở [docs/aws-deployment.md](../../docs/aws-deployment.md). [`template.yaml`](template.yaml) (AWS SAM) tạo:
 
 - 6 bảng DynamoDB; Lambda `ingest` (IoT Rule), `api` (HTTP API stage `v1`), `jobs` (EventBridge Scheduler: hết hạn giữ ô mỗi phút, xóa dữ liệu định danh mỗi giờ); log giữ 7 ngày;
-- Cognito user pool với nhóm `ADMIN`, `KIOSK`; JWT authorizer cho `/kiosk/*`, `/admin/*`;
+- Cognito user pool với nhóm `ADMIN`, `KIOSK`; JWT authorizer cho `/kiosk/*`, `/admin/*`; app client cho phép `USER_PASSWORD_AUTH` vì web gọi thẳng API Cognito (`web/src/auth.ts`);
 - Thing và IoT policy cho `pi-01`, `gate-01`, `slots-01`, mỗi policy chỉ được topic của thiết bị đó;
 - web: S3 riêng tư + CloudFront (OAC, HTTPS, function trả `index.html` cho route của app, header bảo mật để token QR không lọt qua Referer);
 - alarm: `jobs` lỗi (purge có thể trễ hạn), `ingest` lỗi (gồm không phát được lệnh cổng), API trả 5xx; gửi email qua SNS nếu đặt `AlarmEmail`.

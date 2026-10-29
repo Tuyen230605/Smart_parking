@@ -495,7 +495,9 @@ Resources:
       UserPoolId: !Ref UserPool
       ClientName: !Sub smart-parking-${Stage}-web
       GenerateSecret: false
-      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      # web/src/auth.ts gọi InitiateAuth USER_PASSWORD_AUTH qua HTTPS (không cần thư viện SRP).
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
 
   AdminGroup:

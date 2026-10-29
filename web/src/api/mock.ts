@@ -1,5 +1,6 @@
 // API giả trong bộ nhớ để làm web khi backend chưa xong. Hành vi bám docs/api-contract.md.
 // Token thử: /s/demo (bình thường), /s/demo-f2 (tầng 2), /s/sent (đã gửi email), /s/expired (410).
+import { createMockAdmin } from "./mockAdmin";
 import { ApiError, type Api, type Claim, type Slot } from "./types";
 
 const SLOT_IDS = ["F1", "F2"].flatMap((f) => ["A", "B", "C"].flatMap((r) => [1, 2, 3].map((c) => `${f}-${r}${c}`)));
@@ -70,6 +71,8 @@ export const mockApi: Api = {
       occupied: slots.filter((s) => s.status === "OCCUPIED").length,
       unknown: slots.filter((s) => s.status === "UNKNOWN").length,
       offline_devices: [],
-      alerts: [],
+      alerts: ["1 lượt chờ quản trị xử lý"],
     }),
+
+  ...createMockAdmin(slots, routeSteps),
 };

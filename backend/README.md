@@ -124,6 +124,5 @@ Cần đưa vào PR hợp đồng v1.1 để nhóm duyệt:
 ## Chưa làm
 
 - Gửi lại email (`resend`) và đánh dấu ô `OUT_OF_SERVICE` chưa có endpoint.
-- Phần web của người 4: `web/src/auth.ts` (Cognito) và trang `/admin` dùng các endpoint trên.
 - PR hợp đồng v1.1 cho 10 điểm khác ở trên.
 - Deploy lên AWS thật và chạy SIM-01 → SIM-16 với thiết bị (người 4 tự deploy theo [infra/aws](../infra/aws/README.md)).

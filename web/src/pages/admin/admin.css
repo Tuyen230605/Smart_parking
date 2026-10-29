@@ -1,0 +1,57 @@
+/* Chỉ áp dụng trong trang quản trị (.admin); dùng biến màu chung trong src/styles.css. */
+.admin button { width: auto; padding: 8px 14px; font-size: 0.95rem; }
+.admin button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+.admin button.danger { background: var(--occupied); }
+
+.admin-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.admin-head h1 { margin: 0; font-size: 1.5rem; }
+.admin-user { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.9rem; }
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.admin-tabs a { padding: 8px 12px; text-decoration: none; color: var(--muted); border-bottom: 2px solid transparent; }
+.admin-tabs a.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.dev-note { font-size: 0.85rem; color: var(--muted); margin: 0 0 12px; }
+
+.admin table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.admin th, .admin td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.admin th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+.admin tr.clickable { cursor: pointer; }
+.admin tr.clickable:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.table-wrap { overflow-x: auto; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+.badge-ok { background: color-mix(in srgb, var(--available) 18%, transparent); color: var(--available); }
+.badge-warn { background: color-mix(in srgb, var(--reserved) 22%, transparent); color: color-mix(in srgb, var(--reserved) 70%, var(--text)); }
+.badge-info { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.badge-done { background: color-mix(in srgb, var(--unknown) 20%, transparent); color: var(--muted); }
+.badge-bad { background: color-mix(in srgb, var(--occupied) 18%, transparent); color: var(--occupied); }
+
+.alerts { margin: 0; padding-left: 1.2em; }
+.alerts li { margin-bottom: 4px; }
+.queues { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.queue-item { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); text-decoration: none; color: inherit; }
+.queue-item:last-child { border-bottom: 0; }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+
+.admin form label { margin-bottom: 10px; font-size: 0.92rem; }
+.admin input[type="text"], .admin input[type="number"], .admin select, .admin textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+.radio-row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.radio-row label { display: flex; gap: 6px; align-items: center; margin: 0; }
+.actions-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; }
+.audit { margin: 0; padding-left: 1.2em; font-size: 0.9rem; }
+.audit li { margin-bottom: 6px; }
+.copy-row { display: flex; gap: 8px; align-items: center; overflow-wrap: anywhere; font-size: 0.9rem; }
