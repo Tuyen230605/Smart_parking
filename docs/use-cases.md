@@ -59,7 +59,7 @@ Backend chỉ tính các ô `AVAILABLE` có dữ liệu mới. Nếu không còn
 
 ## UC-05: Xe không vào ô được gán
 
-Job chạy mỗi phút: phiên `RESERVED`/`ENTRY_GATE_OPEN` quá 5 phút mà ô chưa báo có xe chuyển `EXPIRED`, bỏ khóa biển số và QR, giải phóng ô chỉ khi ô vẫn trống. Dashboard báo số lượt hết hạn trong 1 giờ qua. Nếu một ô khác báo có xe, không tự gán lại; dashboard báo "ô có xe nhưng không có phiên" để quản trị kiểm tra.
+Job chạy mỗi phút: phiên `RESERVED`/`ENTRY_GATE_OPEN` quá 5 phút mà ô chưa báo có xe chuyển `EXPIRED`, bỏ khóa biển số và QR, giải phóng ô chỉ khi ô vẫn trống. Nếu ô được gán đã báo có xe mà phiên chưa sang `PARKED` (xử lý lỗi giữa chừng), job chuyển phiên sang `PARKED` thay vì hết hạn. Dashboard báo số lượt hết hạn trong 1 giờ qua. Nếu một ô khác báo có xe, không tự gán lại; dashboard báo "ô có xe nhưng không có phiên" để quản trị kiểm tra.
 
 ## UC-06: Xe yêu cầu ra và tính phí
 

@@ -19,7 +19,7 @@ Token QR có dạng `session_id.nonce.hạn.chữ_ký`: `nonce` ngẫu nhiên 12
 
 ## 2. Quy tắc chung
 
-- **Idempotency-Key:** bắt buộc với mọi request thay đổi dữ liệu (`POST`, `PUT`), 8–64 ký tự `A-Z a-z 0-9 _ -`. Gửi lại cùng key cho cùng thao tác trả kết quả hiện tại mà không làm lại (không gửi email/lệnh cổng lần hai). Client giữ key khi thử lại sau lỗi mạng/5xx; tạo key mới sau khi thành công hoặc sau lỗi 4xx.
+- **Idempotency-Key:** bắt buộc với mọi request thay đổi dữ liệu (`POST`, `PUT`), 8–64 ký tự `A-Z a-z 0-9 _ -`. Gửi lại cùng key cho cùng thao tác trả kết quả hiện tại mà không làm lại (không gửi email/lệnh cổng lần hai), kể cả khi đã có key mới hơn; backend nhớ key ít nhất 24 giờ. Client giữ key khi thử lại sau lỗi mạng/5xx; tạo key mới sau khi thành công hoặc sau lỗi 4xx.
 - **Thời gian:** ISO-8601 UTC có mili giây, ví dụ `2026-10-29T02:00:00.000Z`. Field chưa có giá trị trả `null`.
 - **Dữ liệu định danh:** biển số/email chỉ trả cho admin và chỉ khi chưa quá hạn 10 ngày; quá hạn trả `null` dù job xóa chưa chạy.
 - **Audit:** mỗi thao tác admin thêm một mục `{action, at, actor_id, actor, reason?, detail?}` vào phiên (hoặc bảng giá); không chứa biển số/email.
@@ -215,7 +215,7 @@ API Gateway có thể tự trả 401/403/429/5xx với body `{"message": "…"}`
 
 Index: `by_state` (`state`, `created_at`), `by_site` (`site_id`, `created_at`), `active_claims` (`claim_pk`, `claim_expires_at`, chỉ phiên còn QR, không chiếu biển số/email), `purge_due` (`pii_pk`, `purge_due_at`, chỉ phiên còn dữ liệu định danh).
 
-Idempotency: key của mỗi thao tác lưu ngay trên phiên (`email_idempotency_key`, `payment_idempotency_key`, …) trong cùng lần ghi có điều kiện. Không lưu bản sao response, nên không giữ dữ liệu định danh ngoài phiên.
+Idempotency, theo hai loại thao tác. Thao tác chỉ thành công được một lần (email, `resolve-plate`, `payment`, `confirm-passage`) lưu key ngay trên phiên (`email_idempotency_key`, `payment_idempotency_key`, …) trong cùng lần ghi có điều kiện. Thao tác lặp lại được (`open-exit`, `renew-claim`, `PUT /admin/pricing`) ghi dấu `idem#<thao tác>#<phạm vi>#<key>` vào `ProcessedMessages` trong cùng transaction, nên key cũ gửi lại sau một key mới hơn vẫn không chạy lần hai. Không lưu bản sao response, nên không giữ dữ liệu định danh ngoài phiên.
 
 ### `ActivePlates` và thao tác tạo phiên
 
@@ -223,7 +223,7 @@ Idempotency: key của mỗi thao tác lưu ngay trên phiên (`email_idempotenc
 
 ### `ProcessedMessages`, `DeviceStatus`, `PricingConfig`
 
-- `ProcessedMessages`: `message_id` (PK) là `event_id` đã xử lý, hoặc `cmd#<command_id>` ánh xạ lệnh cổng về phiên để ACK `OPEN` chuyển đúng phiên; TTL 7 ngày.
+- `ProcessedMessages`: `message_id` (PK) là `event_id` đã xử lý hoặc `cmd#<command_id>` ánh xạ lệnh cổng về phiên để ACK `OPEN` chuyển đúng phiên (TTL 7 ngày), hoặc dấu `idem#…` của Idempotency-Key (TTL 24 giờ, `open-exit` lưu kèm `command_id`).
 - `DeviceStatus`: `device_id` (PK), `state`, `last_seen_at`, `firmware_version`; slots-01 thêm `last_snapshot_at`; gate-01 thêm trạng thái/lỗi từng cần và OLED.
 - `PricingConfig`: item `current` chứa `rules` (`version` + 4 số), `updated_at`, `updated_by`, `audit`.
 
