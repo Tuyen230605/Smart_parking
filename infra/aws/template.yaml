@@ -66,6 +66,7 @@ Resources:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - {AttributeName: session_id, AttributeType: S}
+        - {AttributeName: site_id, AttributeType: S}
         - {AttributeName: state, AttributeType: S}
         - {AttributeName: created_at, AttributeType: S}
         - {AttributeName: claim_pk, AttributeType: S}
@@ -77,6 +78,12 @@ Resources:
         - IndexName: by_state
           KeySchema:
             - {AttributeName: state, KeyType: HASH}
+            - {AttributeName: created_at, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+        # Danh sách mọi phiên mới nhất trước cho trang quản trị.
+        - IndexName: by_site
+          KeySchema:
+            - {AttributeName: site_id, KeyType: HASH}
             - {AttributeName: created_at, KeyType: RANGE}
           Projection: {ProjectionType: ALL}
         # Chỉ phiên còn QR có claim_pk; không chiếu biển số/email sang index này.
@@ -170,10 +177,18 @@ Resources:
       Handler: parking.api.handler
       Policies:
         - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
-        - DynamoDBReadPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ProcessedTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref PricingTable}
         - DynamoDBReadPolicy: {TableName: !Ref DevicesTable}
-        - DynamoDBReadPolicy: {TableName: !Ref PricingTable}
         - Statement:
+            # Quản trị cho xe vào sau khi sửa OCR và mở cần ra.
+            - Effect: Allow
+              Action: iot:Publish
+              Resource:
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/gates/gate-01/commands
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/displays/gate-01/commands
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ClaimKeysParam}
@@ -197,6 +212,36 @@ Resources:
         Dashboard:
           Type: HttpApi
           Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /admin/dashboard}
+        Sessions:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /admin/sessions}
+        Session:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: "/admin/sessions/{session_id}"}
+        ResolvePlate:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/admin/sessions/{session_id}/resolve-plate"}
+        RenewClaim:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/admin/sessions/{session_id}/renew-claim"}
+        Payment:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/admin/sessions/{session_id}/payment"}
+        OpenExit:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/admin/sessions/{session_id}/open-exit"}
+        ConfirmPassage:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/admin/sessions/{session_id}/confirm-passage"}
+        Devices:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /admin/devices}
+        PricingGet:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /admin/pricing}
+        PricingPut:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: PUT, Path: /admin/pricing}
 
   ApiLogGroup:
     Type: AWS::Logs::LogGroup

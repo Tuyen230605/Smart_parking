@@ -8,11 +8,12 @@ from conftest import session_of, slot_changed, slot_of, snapshot, vehicle
 KEY_HEADER = {"Idempotency-Key": "8f3c1d2e-key-0001"}
 
 
-def call(app, method, path, body=None, headers=None, groups=None):
+def call(app, method, path, body=None, headers=None, groups=None, query=None):
     ctx = {"http": {"method": method}, "stage": "v1", "requestId": "req-1"}
     if groups is not None:
-        ctx["authorizer"] = {"jwt": {"claims": {"cognito:groups": groups}}}
-    event = {"rawPath": f"/v1{path}", "headers": headers or {}, "requestContext": ctx,
+        ctx["authorizer"] = {"jwt": {"claims": {"cognito:groups": groups, "sub": "admin-sub-1",
+                                                "username": "admin1"}}}
+    event = {"rawPath": f"/v1{path}", "headers": headers or {}, "requestContext": ctx, "queryStringParameters": query,
              "body": json.dumps(body) if isinstance(body, dict) else body, "isBase64Encoded": False}
     response = api.handle(app, event)
     return response["statusCode"], json.loads(response["body"])

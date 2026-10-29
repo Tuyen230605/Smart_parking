@@ -19,23 +19,55 @@ uv run pytest        # DynamoDB giả bằng moto, không cần tài khoản AWS
 | File | Vai trò |
 |---|---|
 | `ingest.py` | Lambda nhận MQTT qua IoT Rule: xe vào/ra, trạng thái ô, ACK cổng/OLED, trạng thái thiết bị |
-| `api.py` | Lambda HTTP API: `/public/*`, `/kiosk/active-claims`, `/admin/dashboard` |
+| `api.py` | Lambda HTTP API: định tuyến, `/public/*`, `/kiosk/active-claims`, `/admin/dashboard` |
+| `admin.py` | Endpoint quản trị còn lại: phiên, xử lý OCR, QR, thu phí, cổng ra, thiết bị, bảng giá |
+| `flows.py` | Giữ ô và khóa phí ra, dùng chung cho sự kiện thiết bị và thao tác quản trị |
+| `rest.py` | Đọc event API Gateway, lỗi chuẩn, kiểm nhóm Cognito, Idempotency-Key |
 | `contract.py` | Kiểm message MQTT v1 và tạo `gate_command`/`display_command` |
-| `store.py` | DynamoDB: chuyển kiểu, ghi có điều kiện, transaction |
+| `store.py` | DynamoDB: chuyển kiểu, ghi có điều kiện, transaction, phân trang |
 | `state.py` | Trạng thái ô/thiết bị suy ra lúc đọc |
 | `claims.py` | Token QR ký HMAC, cache khóa từ SSM |
 | `layout.py`, `pricing.py`, `plates.py` | 18 ô và lộ trình, bảng giá, chuẩn hóa biển số |
 | `app.py`, `config.py` | Ghép boto3/IoT/SES và đọc biến môi trường |
 
+## Trạng thái phiên
+
+```text
+RESERVED → ENTRY_GATE_OPEN → PARKED → EXIT_REQUESTED (0 ₫) ─────────────┐
+   │        (ACK cần vào)   (ô báo xe) ↘ PAYMENT_PENDING → (thu tiền) → EXIT_REQUESTED
+   └───────────────────────────────────┘                                   ↓ open-exit + ACK
+                                                                    EXIT_GATE_OPEN → confirm-passage → CLOSED
+MANUAL_REVIEW → RESOLVED (cho vào: phiên RESERVED mới; cho ra: khóa phí phiên đang đỗ) | DISMISSED
+```
+
+`EXPIRED` (giữ ô quá 5 phút) thuộc đợt 3.
+
+## Endpoint quản trị
+
+Tất cả cần nhóm `ADMIN`. Thao tác thay đổi cần header `Idempotency-Key`; gửi lại cùng key trả kết quả hiện tại mà không làm lại. Mỗi thao tác thêm một mục `audit` (`action`, `at`, `actor_id`, `actor`, `reason`, `detail`) vào phiên, không chứa biển số/email.
+
+| Endpoint | Body | Kết quả |
+|---|---|---|
+| `GET /admin/sessions?status=&limit=&cursor=` | | `{sessions: [...], next_cursor}`, mới nhất trước, `limit` 1–100 |
+| `GET /admin/sessions/{id}` | | Chi tiết, `audit`; biển số/email là `null` khi quá hạn 10 ngày |
+| `POST .../resolve-plate` | `{action: ENTRY\|EXIT\|DISMISS, plate_text, reason}` | `{review, session, commands_sent}`; `EXIT` khóa phí ở lúc xe tới cổng ra |
+| `POST .../renew-claim` | `{reason?}` | Như một phần tử của `/kiosk/active-claims`; QR cũ trả 410 |
+| `POST .../payment` | `{payment_status: PAID_CASH\|WAIVED, amount_vnd, note}` | Chi tiết phiên; `PAID_CASH` phải đúng `fee_vnd`, `WAIVED` bắt buộc `note` |
+| `POST .../open-exit` | `{reason?}` | `202 {command_id, session}`; `503 DEVICE_OFFLINE` nếu gate-01 offline hoặc không gửi được lệnh |
+| `POST .../confirm-passage` | `{reason?}` | Phiên `CLOSED`; bỏ khóa biển số và giữ ô, xóa email |
+| `GET /admin/devices` | | `{devices: [...]}` gồm `online`, trạng thái hai cần, OLED, snapshot ô |
+| `GET /admin/pricing`, `PUT /admin/pricing` | `{free_minutes, first_block_minutes, first_block_vnd, extra_hour_vnd, reason?}` | Bảng giá kèm `version`; phiên đang mở giữ giá lúc check-in |
+
 ## Quyết định thiết kế
 
-- **Gán ô nguyên tử:** một `TransactWriteItems` gồm dấu `event_id`, khóa biển số trong `ActivePlates`, kiểm snapshot ô còn mới, giữ ô `occupied=false`, tạo phiên và ghi `command_id`. Ô vừa bị lượt khác giữ thì thử ô kế tiếp. Lệnh MQTT chỉ phát sau khi transaction thành công; retry gặp `DUPLICATE` nên không mở cần lần hai.
+- **Gán ô nguyên tử:** một `TransactWriteItems` gồm dấu sự kiện (hoặc phiên chờ xử lý), khóa biển số trong `ActivePlates`, kiểm snapshot ô còn mới, giữ ô `occupied=false`, tạo phiên và ghi `command_id`. Ô vừa bị lượt khác giữ thì thử ô kế tiếp. Lệnh MQTT chỉ phát sau khi transaction thành công; retry gặp `DUPLICATE` nên không mở cần lần hai.
 - **Trạng thái suy ra lúc đọc:** ô `UNKNOWN` khi `slots-01` không gửi snapshot quá 90 giây, thiết bị `OFFLINE` khi quá 90 giây không có tin. Không cần job định kỳ cho hai việc này.
 - **Không mở cần khi không chắc:** sai làn, không đọc được biển số, confidence < 0,85, biển số đang có phiên, ô không có dữ liệu mới, hoặc sự kiện Pi cũ hơn 60 giây đều tạo phiên `MANUAL_REVIEW` và hiện `CHO NHAN VIEN` trên OLED.
-- **Xe ra:** khóa `charge_end_at` và `fee_vnd` ngay khi Pi báo thẻ đỏ; mở cần ra là thao tác quản trị (G3 chưa chốt).
+- **Xe ra:** khóa `charge_end_at` và `fee_vnd` ngay khi Pi báo thẻ đỏ. Mở cần ra là thao tác quản trị (G3 chưa chốt), chỉ khi gate-01 online.
+- **Idempotency không cần bảng riêng:** key của mỗi thao tác lưu trên phiên trong cùng lần ghi có điều kiện. Không giữ bản sao response nên không lưu dữ liệu định danh ngoài phiên, không có trạng thái "đang xử lý" bị kẹt. `open-exit` gửi lệnh lỗi thì bỏ key để bấm lại được.
 - **QR:** token `session_id.nonce.hạn.chữ_ký`, không lưu trong DB. Kiosk ký lại URL từ dữ liệu phiên. Khóa ở SSM SecureString, cache 5 phút; đổi khóa bằng giá trị `khóa_mới,khóa_cũ`.
-- **Email:** một lần mỗi phiên bằng conditional update; retry cùng `Idempotency-Key` trả 202 mà không gửi lại. SES lỗi chỉ ghi `FAILED`, không ảnh hưởng phiên.
-- **Dữ liệu định danh:** phiên có `identity_expires_at` (10 ngày) và `purge_due_at` (sớm hơn 1 giờ) trên index thưa `purge_due`. Log không chứa biển số, email, token.
+- **Email:** một lần mỗi phiên bằng conditional update; SES lỗi chỉ ghi `FAILED`, không ảnh hưởng phiên. Email bị xóa khi đóng phiên.
+- **Dữ liệu định danh:** phiên có `identity_expires_at` (10 ngày) và `purge_due_at` (sớm hơn 1 giờ) trên index thưa `purge_due`. API quản trị ẩn biển số/email quá hạn kể cả khi purge chưa chạy. Log không chứa biển số, email, token.
 
 ## Khác hoặc bổ sung so với hợp đồng hiện tại
 
@@ -43,14 +75,16 @@ Cần đưa vào PR hợp đồng v1.1 để nhóm duyệt:
 
 1. `GET /kiosk/active-claims` thêm `route_steps`, `created_at`; sắp phiên mới nhất trước.
 2. Lỗi 500 trả body chuẩn với mã mới `INTERNAL_ERROR`.
-3. Thêm `payment_status=PENDING`. Phiên 0 ₫ sang `EXIT_REQUESTED`, có phí sang `PAYMENT_PENDING`.
+3. Thêm `payment_status=PENDING`. Phiên 0 ₫ sang `EXIT_REQUESTED`, có phí sang `PAYMENT_PENDING`, thu tiền xong về `EXIT_REQUESTED`.
 4. `review_reason` của `MANUAL_REVIEW`: `WRONG_LANE`, `STALE_EVENT`, `UNREADABLE_PLATE`, `LOW_CONFIDENCE`, `PLATE_ALREADY_ACTIVE`, `SLOTS_UNKNOWN`, `NO_ACTIVE_SESSION`, `SESSION_NOT_PARKED`.
 5. `gate_telemetry`/`display_telemetry` phải có phần đầu chung `schema_version`, `message_type`, `event_id`, `device_id`, `occurred_at`; `boot_id`/`seq` không bắt buộc.
 6. `GET /public/layout`: `updated_at` là `null` nếu ô chưa từng có dữ liệu.
-7. `POST /public/claims/{token}/email` bắt buộc header `Idempotency-Key` (8–64 ký tự `A-Z a-z 0-9 _ -`).
+7. Mọi mutation (email khách và quản trị) bắt buộc header `Idempotency-Key` (8–64 ký tự `A-Z a-z 0-9 _ -`).
 8. Sự kiện Pi cũ hơn 60 giây hoặc lệch giờ quá 30 giây không mở cần.
+9. Trạng thái mới `RESOLVED`, `DISMISSED` cho phiên chờ xử lý; không dùng `DETECTED` và `EXIT_CONFIRMED` (xác nhận xe qua chuyển thẳng `CLOSED`).
+10. Request/response của endpoint quản trị như bảng trên, gồm phân trang `limit`/`cursor`/`next_cursor` và `resolve-plate` có thêm `DISMISS`.
 
 ## Chưa làm
 
-- **Đợt 2:** endpoint quản trị còn lại (danh sách/chi tiết phiên, `resolve-plate`, `renew-claim`, `payment`, `open-exit`, `confirm-passage`, thiết bị, bảng giá) và Idempotency-Key cho các mutation này.
-- **Đợt 3:** job theo lịch (giải phóng ô giữ quá 5 phút, purge 10 ngày), alarm CloudWatch, S3 + CloudFront cho web, script tạo certificate thiết bị, chạy API local cho web.
+- **Đợt 3:** job theo lịch (giải phóng ô giữ quá 5 phút → `EXPIRED`, purge 10 ngày), alarm CloudWatch, S3 + CloudFront cho web, script tạo certificate thiết bị, chạy API local cho web.
+- Gửi lại email (`resend`) và sửa thủ công trạng thái ô/`OUT_OF_SERVICE` chưa có endpoint.

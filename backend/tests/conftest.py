@@ -74,6 +74,7 @@ def create_tables(client):
     _table(client, TABLES.slots, "slot_id")
     _table(client, TABLES.sessions, "session_id", [
         ("by_state", "state", "created_at", {"ProjectionType": "ALL"}),
+        ("by_site", "site_id", "created_at", {"ProjectionType": "ALL"}),
         ("active_claims", "claim_pk", "claim_expires_at",
          {"ProjectionType": "INCLUDE",
           "NonKeyAttributes": ["state", "session_ref", "slot_id", "claim_nonce", "created_at"]}),
@@ -134,6 +135,10 @@ def slot_changed(app, slot_id, occupied, **fields):
 def gate_ack(app, command_id, gate="ENTRY", state="OPEN", error_code=None):
     return message(app, "gate_telemetry", "gates", "gate-01", "telemetry", command_id=command_id, gate=gate,
                    state=state, error_code=error_code)
+
+
+def device_status(app, device, state="ONLINE"):
+    return message(app, "device_status", "devices", device, "status", state=state, firmware_version="0.1.0")
 
 
 def session_of(app, session_id):

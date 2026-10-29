@@ -65,10 +65,11 @@ def _expr(condition=None, values=None, names=None, **extra) -> dict:
     return out
 
 
-def set_clause(fields: dict) -> tuple[str, dict, dict]:
+def set_clause(fields: dict, appends: dict | None = None) -> tuple[str, dict, dict]:
     """Tạo `SET ... REMOVE ...` với tên thay thế cho mọi thuộc tính (tránh từ khóa như state, source).
 
-    Giá trị None nghĩa là xóa thuộc tính. Placeholder dùng tiền tố #f/:f, condition không được trùng.
+    Giá trị None nghĩa là xóa thuộc tính. `appends` nối thêm phần tử vào thuộc tính dạng list.
+    Placeholder dùng tiền tố #f/:f và #a/:a, condition không được trùng.
     """
     sets, removes, names, values = [], [], {}, {}
     for i, (name, value) in enumerate(fields.items()):
@@ -78,6 +79,11 @@ def set_clause(fields: dict) -> tuple[str, dict, dict]:
         else:
             values[f":f{i}"] = value
             sets.append(f"#f{i} = :f{i}")
+    for i, (name, items) in enumerate((appends or {}).items()):
+        names[f"#a{i}"] = name
+        values[f":a{i}"] = list(items)
+        values[":a_empty"] = []
+        sets.append(f"#a{i} = list_append(if_not_exists(#a{i}, :a_empty), :a{i})")
     expr = ("SET " + ", ".join(sets) if sets else "") + (" REMOVE " + ", ".join(removes) if removes else "")
     return expr.strip(), names, values
 
@@ -93,6 +99,10 @@ def op_update(table, key, update, condition=None, values=None, names=None) -> di
 
 def op_check(table, key, condition, values=None, names=None) -> dict:
     return {"ConditionCheck": {"TableName": table, "Key": marshal(key), **_expr(condition, values, names)}}
+
+
+def op_delete(table, key, condition=None, values=None, names=None) -> dict:
+    return {"Delete": {"TableName": table, "Key": marshal(key), **_expr(condition, values, names)}}
 
 
 def _cancellation_reasons(error: ClientError) -> list[str]:
@@ -155,6 +165,19 @@ class Db:
             if "LastEvaluatedKey" not in r:
                 return out
             kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+    def query_page(self, table, key_condition, values, names=None, index=None, descending=False, limit=20,
+                   start_key: dict | None = None) -> tuple[list[dict], dict | None]:
+        """Một trang kết quả; `start_key`/khóa trả về ở dạng thô của DynamoDB để làm cursor."""
+        kwargs = {"TableName": table, "KeyConditionExpression": key_condition, "ScanIndexForward": not descending,
+                  "Limit": limit, **_expr(None, values, names, IndexName=index, ExclusiveStartKey=start_key)}
+        try:
+            r = self.client.query(**kwargs)
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ValidationException" and start_key:
+                raise ValueError("cursor không hợp lệ") from None
+            raise
+        return [unmarshal(i) for i in r["Items"]], r.get("LastEvaluatedKey")
 
     def transact(self, ops: list[dict]):
         try:

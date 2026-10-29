@@ -1,44 +1,27 @@
-"""Lambda HTTP API v1 (docs/api-contract.md): public, guest QR, kiosk và dashboard quản trị.
+"""Lambda HTTP API v1 (docs/api-contract.md): public, guest QR, kiosk; endpoint quản trị ở admin.py.
 
 API Gateway (JWT authorizer Cognito) xác thực kiosk/admin; Lambda vẫn kiểm nhóm để không dựa vào
 cấu hình route. Mọi lỗi trả `{code, message, request_id}`, kể cả lỗi 500 (`INTERNAL_ERROR`).
 """
-import base64
-import json
 import re
 import traceback
 from collections import Counter
-from dataclasses import dataclass
 from datetime import timedelta
 
+from . import admin
 from .app import App, get_app
-from .claims import InvalidToken, sign_claim, verify_claim
+from .claims import InvalidToken, verify_claim
 from .contract import DEVICES, GATE, SLOTS
+from .flows import claim_summary
 from .ids import new_uuid
 from .layout import SLOT_IDS, route_steps, source_of
 from .log import log
+from .rest import ApiError, Request, authorize, idempotency_key, json_body, parse_event, response
 from .state import CLAIM_STATES, board_fresh, cutoff, device_online, slot_status
 from .store import ConditionFailed, set_clause
 from .timeutil import epoch, iso, parse_iso
 
 EMAIL_RE = re.compile(r"[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}")
-IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9_-]{8,64}")
-MAX_BODY_BYTES = 4096
-
-
-class ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str):
-        super().__init__(message)
-        self.status, self.code, self.message = status, code, message
-
-
-@dataclass
-class Request:
-    method: str
-    path: str
-    headers: dict
-    body: str | None
-    groups: set[str] | None  # None: request không qua JWT authorizer
 
 
 def handler(event, _context):
@@ -49,23 +32,23 @@ def handle(app: App, event: dict) -> dict:
     request_id = event.get("requestContext", {}).get("requestId") or new_uuid()
     route_name = "unknown"
     try:
-        req = _parse(event)
+        req = parse_event(event)
         for method, pattern, fn, roles in ROUTES:
             match = pattern.fullmatch(req.path)
             if match and method == req.method:
                 route_name = fn.__name__
                 if roles:
-                    _authorize(req, roles)
+                    authorize(req, roles)
                 status, body = fn(app, req, **match.groupdict())
-                return _response(status, body)
+                return response(status, body)
         raise ApiError(404, "NOT_FOUND", "Không có endpoint này")
     except ApiError as e:
-        return _response(e.status, {"code": e.code, "message": e.message, "request_id": request_id})
+        return response(e.status, {"code": e.code, "message": e.message, "request_id": request_id})
     except Exception as e:
         # Không log path/body vì có thể chứa token hoặc email.
         log("api_error", request_id=request_id, route=route_name, error=type(e).__name__,
             trace="".join(traceback.format_tb(e.__traceback__)))
-        return _response(500, {"code": "INTERNAL_ERROR", "message": "Lỗi máy chủ", "request_id": request_id})
+        return response(500, {"code": "INTERNAL_ERROR", "message": "Lỗi máy chủ", "request_id": request_id})
 
 
 # ---------- Public và guest ----------
@@ -104,11 +87,9 @@ def post_claim_email(app: App, req: Request, token: str):
     """Một email hướng dẫn cho mỗi phiên. Gửi lại cùng Idempotency-Key trả 202 mà không gửi lần hai."""
     now = app.clock()
     t = app.cfg.tables
-    key = req.headers.get("idempotency-key", "")
-    if not IDEMPOTENCY_KEY_RE.fullmatch(key):
-        raise ApiError(400, "INVALID_INPUT", "Thiếu header Idempotency-Key hợp lệ")
+    key = idempotency_key(req)
     session = _load_claim(app, token)
-    body = _json_body(req)
+    body = json_body(req)
     email, consent = body.get("email"), body.get("consent_for_this_session")
     email = email.strip() if isinstance(email, str) else ""
     if len(email) > 254 or not EMAIL_RE.fullmatch(email) or consent is not True:
@@ -176,7 +157,7 @@ def _load_claim(app: App, token: str) -> dict:
     return session
 
 
-# ---------- Kiosk và quản trị ----------
+# ---------- Kiosk và dashboard ----------
 
 def get_active_claims(app: App, req: Request):
     """Phiên còn hạn QR, mới nhất trước. Thêm `route_steps`, `created_at` so với hợp đồng để kiosk hiện lộ trình."""
@@ -184,19 +165,7 @@ def get_active_claims(app: App, req: Request):
     keys = app.keys.keys()
     items = app.db.query(app.cfg.tables.sessions, "claim_pk = :site AND claim_expires_at > :now",
                          {":site": app.cfg.site_id, ":now": iso(now)}, index="active_claims")
-    claims = []
-    for s in items:
-        if s.get("state") not in CLAIM_STATES:
-            continue
-        token = sign_claim(keys, s["session_id"], s["claim_nonce"], epoch(parse_iso(s["claim_expires_at"])))
-        claims.append({
-            "session_ref": s["session_ref"],
-            "slot_id": s["slot_id"],
-            "route_steps": route_steps(s["slot_id"]),
-            "claim_url": f"{app.cfg.web_base_url}/s/{token}",
-            "claim_expires_at": s["claim_expires_at"],
-            "created_at": s["created_at"],
-        })
+    claims = [claim_summary(app, s, keys) for s in items if s.get("state") in CLAIM_STATES]
     claims.sort(key=lambda c: c["created_at"], reverse=True)
     return 200, claims
 
@@ -242,62 +211,6 @@ def _alerts(app: App, slots: dict, devices: dict, offline: list, fresh: bool, no
     return alerts
 
 
-# ---------- Hạ tầng request/response ----------
-
-def _parse(event: dict) -> Request:
-    ctx = event.get("requestContext", {})
-    path = event.get("rawPath") or "/"
-    stage = ctx.get("stage")
-    if stage and stage != "$default" and path.startswith(f"/{stage}/"):
-        path = path[len(stage) + 1:]
-    body = event.get("body")
-    if body is not None and event.get("isBase64Encoded"):
-        body = base64.b64decode(body).decode("utf-8", errors="replace")
-    return Request(
-        method=ctx.get("http", {}).get("method", "GET").upper(),
-        path=path.rstrip("/") or "/",
-        headers={k.lower(): v for k, v in (event.get("headers") or {}).items()},
-        body=body,
-        groups=_groups(ctx),
-    )
-
-
-def _groups(ctx: dict) -> set[str] | None:
-    claims = ctx.get("authorizer", {}).get("jwt", {}).get("claims")
-    if claims is None:
-        return None
-    raw = claims.get("cognito:groups", "")
-    # HTTP API chuyển mảng trong JWT thành chuỗi dạng "[ADMIN KIOSK]".
-    return set(raw) if isinstance(raw, list) else {g for g in re.split(r"[\s,\[\]]+", raw) if g}
-
-
-def _authorize(req: Request, roles: set[str]):
-    if req.groups is None:
-        raise ApiError(401, "UNAUTHENTICATED", "Cần đăng nhập")
-    if not req.groups & roles:
-        raise ApiError(403, "FORBIDDEN", "Tài khoản không có quyền này")
-
-
-def _json_body(req: Request) -> dict:
-    if not req.body or len(req.body.encode()) > MAX_BODY_BYTES:
-        raise ApiError(400, "INVALID_INPUT", "Body JSON thiếu hoặc quá lớn")
-    try:
-        body = json.loads(req.body)
-    except ValueError:
-        raise ApiError(400, "INVALID_INPUT", "Body không phải JSON") from None
-    if not isinstance(body, dict):
-        raise ApiError(400, "INVALID_INPUT", "Body phải là object JSON")
-    return body
-
-
-def _response(status: int, body) -> dict:
-    return {
-        "statusCode": status,
-        "headers": {"content-type": "application/json; charset=utf-8", "cache-control": "no-store"},
-        "body": json.dumps(body, ensure_ascii=False),
-    }
-
-
 TOKEN = r"(?P<token>[A-Za-z0-9._-]{1,200})"
 ROUTES = [
     ("GET", re.compile(r"/public/layout"), get_layout, None),
@@ -305,4 +218,5 @@ ROUTES = [
     ("POST", re.compile(rf"/public/claims/{TOKEN}/email"), post_claim_email, None),
     ("GET", re.compile(r"/kiosk/active-claims"), get_active_claims, {"KIOSK", "ADMIN"}),
     ("GET", re.compile(r"/admin/dashboard"), get_dashboard, {"ADMIN"}),
+    *admin.ROUTES,
 ]
