@@ -16,7 +16,13 @@ async function request<T>(base: string, path: string, init: RequestInit = {}, au
   const headers = new Headers(init.headers);
   if (init.body) headers.set("Content-Type", "application/json");
   if (auth) {
-    const token = await getAccessToken();
+    let token: string | null;
+    try {
+      token = await getAccessToken();
+    } catch {
+      // Không làm mới được token vì mạng: báo lỗi mạng thay vì gửi request thiếu token (401 → đăng xuất).
+      throw new ApiError(0, "NETWORK_ERROR", "Không làm mới được phiên đăng nhập. Kiểm tra mạng rồi thử lại.");
+    }
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
   let res: Response;

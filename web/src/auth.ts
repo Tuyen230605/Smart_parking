@@ -37,7 +37,11 @@ const MESSAGES: Record<string, string> = {
 
 let accessToken: { value: string; expiresAt: number } | null = null;
 let user: AuthUser | null = null;
-let refreshing: Promise<boolean> | null = null;
+type RefreshResult = "OK" | "SIGNED_OUT" | "TRANSIENT";
+let refreshing: Promise<RefreshResult> | null = null;
+// Tăng mỗi lần bắt đầu hoặc kết thúc một phiên đăng nhập: kết quả refresh của phiên trước bị bỏ, không khôi
+// phục lại người dùng vừa đăng xuất.
+let generation = 0;
 const listeners = new Set<() => void>();
 
 function storage(action: (s: Storage) => string | null | void): string | null {
@@ -115,8 +119,14 @@ export async function signIn(username: string, password: string): Promise<SignIn
   if (!data.AuthenticationResult) {
     throw new AuthError(data.ChallengeName ?? "UNKNOWN", `Cognito yêu cầu bước ${data.ChallengeName} chưa được hỗ trợ.`);
   }
-  accept(data.AuthenticationResult);
+  startSession(data.AuthenticationResult);
   return { status: "SIGNED_IN" };
+}
+
+function startSession(result: AuthResult) {
+  generation += 1;
+  refreshing = null;
+  accept(result);
 }
 
 export async function completeNewPassword(username: string, newPassword: string, session: string): Promise<void> {
@@ -126,44 +136,66 @@ export async function completeNewPassword(username: string, newPassword: string,
     ChallengeResponses: { USERNAME: username, NEW_PASSWORD: newPassword },
   });
   if (!data.AuthenticationResult) throw new AuthError("UNKNOWN", "Không đổi được mật khẩu, thử đăng nhập lại.");
-  accept(data.AuthenticationResult);
+  startSession(data.AuthenticationResult);
 }
 
-/** Lấy access token mới bằng refresh token. Chỉ đăng xuất khi Cognito từ chối token, không đăng xuất vì mất mạng. */
-function refresh(): Promise<boolean> {
+/**
+ * Lấy access token mới bằng refresh token. Chỉ đăng xuất khi Cognito từ chối token; mất mạng hay Cognito lỗi
+ * tạm thời trả TRANSIENT và giữ nguyên phiên. Các lời gọi cùng lúc dùng chung một request.
+ */
+function refresh(): Promise<RefreshResult> {
   const token = storage((s) => s.getItem(REFRESH_KEY));
-  if (!authEnabled || !token) return Promise.resolve(false);
-  refreshing ??= cognito<InitiateAuthResponse>("InitiateAuth", {
+  if (!authEnabled || !token) return Promise.resolve("SIGNED_OUT");
+  if (refreshing) return refreshing;
+  const startedIn = generation;
+  const attempt: Promise<RefreshResult> = cognito<InitiateAuthResponse>("InitiateAuth", {
     AuthFlow: "REFRESH_TOKEN_AUTH",
     AuthParameters: { REFRESH_TOKEN: token },
   })
-    .then((data) => {
-      if (!data.AuthenticationResult) return false;
+    .then((data): RefreshResult => {
+      if (startedIn !== generation || !data.AuthenticationResult) return "SIGNED_OUT";
       accept(data.AuthenticationResult);
-      return true;
+      return "OK";
     })
-    .catch((e) => {
-      if (e instanceof AuthError && e.code === "NotAuthorizedException") signOut();
-      return false;
+    .catch((e): RefreshResult => {
+      if (startedIn !== generation) return "SIGNED_OUT";
+      if (e instanceof AuthError && e.code === "NotAuthorizedException") {
+        signOut();
+        return "SIGNED_OUT";
+      }
+      return "TRANSIENT";
     })
     .finally(() => {
-      refreshing = null;
+      if (refreshing === attempt) refreshing = null;
     });
-  return refreshing;
+  refreshing = attempt;
+  return attempt;
 }
 
+/**
+ * Token cho request cần đăng nhập. Không bao giờ trả null chỉ vì mất mạng: request thiếu token sẽ bị 401 và
+ * làm đăng xuất. Refresh lỗi tạm thời thì dùng token cũ nếu còn hạn, nếu không ném AuthError NETWORK_ERROR.
+ */
 export async function getAccessToken(): Promise<string | null> {
   if (!authEnabled) return null;
   if (accessToken && accessToken.expiresAt - Date.now() > REFRESH_MARGIN_MS) return accessToken.value;
-  return (await refresh()) && accessToken ? accessToken.value : null;
+  const result = await refresh();
+  if (result === "OK" && accessToken) return accessToken.value;
+  if (result === "TRANSIENT") {
+    if (accessToken && accessToken.expiresAt > Date.now()) return accessToken.value;
+    throw new AuthError("NETWORK_ERROR", MESSAGES.NETWORK_ERROR);
+  }
+  return null;
 }
 
 /** Gọi khi tải trang: dùng refresh token còn lưu để không phải đăng nhập lại. */
 export async function restoreSession(): Promise<boolean> {
-  return user !== null || refresh();
+  return user !== null || (await refresh()) === "OK";
 }
 
 export function signOut() {
+  generation += 1;
+  refreshing = null;
   const token = storage((s) => s.getItem(REFRESH_KEY));
   storage((s) => s.removeItem(REFRESH_KEY));
   accessToken = null;
