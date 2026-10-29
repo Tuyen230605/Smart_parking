@@ -1,4 +1,6 @@
 """Luồng thiết bị → backend theo các kịch bản SIM trong docs/simulation-and-test-plan.md."""
+import pytest
+
 from parking import ingest
 from parking.layout import SLOT_IDS
 from parking.timeutil import iso
@@ -144,6 +146,63 @@ def test_older_slot_message_is_ignored(app):
     ingest.process(app, newer)
     assert ingest.process(app, older) == "STALE:F1-A2"
     assert slot_of(app, "F1-A2")["occupied"] is True
+
+
+def test_slot_change_older_than_snapshot_is_ignored(app):
+    """Codex #3: slot_changed đến trễ, cũ hơn snapshot đã nhận, không được biến ô có xe thành trống."""
+    ingest.process(app, snapshot(app, occupied={"F1-A1"}))
+    ingest.process(app, slot_changed(app, "F1-A2", True, seq=10_050))
+    delayed = slot_changed(app, "F1-A2", False, seq=10_080)  # 10_090 (True) bị mất
+    newer = snapshot(app, occupied={"F1-A1", "F1-A2"})
+    newer["seq"] = 10_100
+    ingest.process(app, newer)
+    assert ingest.process(app, delayed) == "STALE:F1-A2"
+    assert slot_of(app, "F1-A2")["occupied"] is True
+    assert ingest.process(app, vehicle(app)) == "RESERVED:F1-A3"
+
+
+def test_snapshot_retry_after_partial_failure(app, monkeypatch):
+    """Codex #4: lỗi giữa chừng thì Lambda retry vẫn ghi đủ ô; snapshot chỉ được đánh dấu khi ghi xong."""
+    ingest.process(app, snapshot(app))
+    before = app.db.get(app.cfg.tables.devices, {"device_id": "slots-01"})["snapshot_seq"]
+    msg = snapshot(app, occupied={"F1-A3"})
+    real = app.db.batch_get
+    fail_once = iter([True])
+
+    def flaky(table, keys):
+        if table == app.cfg.tables.slots and next(fail_once, False):
+            raise ConnectionError("DynamoDB tạm lỗi")
+        return real(table, keys)
+
+    monkeypatch.setattr(app.db, "batch_get", flaky)
+    with pytest.raises(ConnectionError):
+        ingest.process(app, msg)
+    assert app.db.get(app.cfg.tables.devices, {"device_id": "slots-01"})["snapshot_seq"] == before
+    assert ingest.process(app, msg) == "SNAPSHOT:1"
+    assert slot_of(app, "F1-A3")["occupied"] is True
+    assert ingest.process(app, msg) == "STALE"
+
+
+def test_retry_finishes_parking_after_partial_failure(app, monkeypatch):
+    """Codex #5: ghi ô xong mà chuyển PARKED lỗi thì lần retry phải chuyển nốt."""
+    ingest.process(app, snapshot(app))
+    ingest.process(app, vehicle(app))
+    sid = slot_of(app, "F1-A1")["reserved_session_id"]
+    msg = slot_changed(app, "F1-A1", True)
+    real = app.db.update
+    fail_once = iter([True])
+
+    def flaky(table, key, *args, **kwargs):
+        if table == app.cfg.tables.sessions and next(fail_once, False):
+            raise ConnectionError("DynamoDB tạm lỗi")
+        return real(table, key, *args, **kwargs)
+
+    monkeypatch.setattr(app.db, "update", flaky)
+    with pytest.raises(ConnectionError):
+        ingest.process(app, msg)
+    assert session_of(app, sid)["state"] == "RESERVED"
+    assert ingest.process(app, msg) == "PARKED:F1-A1"
+    assert session_of(app, sid)["state"] == "PARKED"
 
 
 def test_messages_breaking_contract_are_rejected(app):

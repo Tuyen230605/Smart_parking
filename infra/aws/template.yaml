@@ -163,6 +163,10 @@ Resources:
               Resource:
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/gates/gate-01/commands
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/displays/gate-01/commands
+            # Lấy endpoint dữ liệu riêng của tài khoản để publish; action này không giới hạn được theo resource.
+            - Effect: Allow
+              Action: iot:DescribeEndpoint
+              Resource: "*"
       EventInvokeConfig:
         MaximumRetryAttempts: 2
       Events:
@@ -193,12 +197,20 @@ Resources:
         - DynamoDBCrudPolicy: {TableName: !Ref PricingTable}
         - DynamoDBReadPolicy: {TableName: !Ref DevicesTable}
         - Statement:
+            # Cho xe vào sau khi sửa OCR kiểm snapshot ô còn mới bằng ConditionCheck trong transaction;
+            # DynamoDBReadPolicy không có action này.
+            - Effect: Allow
+              Action: dynamodb:ConditionCheckItem
+              Resource: !GetAtt DevicesTable.Arn
             # Quản trị cho xe vào sau khi sửa OCR và mở cần ra.
             - Effect: Allow
               Action: iot:Publish
               Resource:
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/gates/gate-01/commands
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/displays/gate-01/commands
+            - Effect: Allow
+              Action: iot:DescribeEndpoint
+              Resource: "*"
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ClaimKeysParam}

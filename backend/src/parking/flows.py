@@ -14,7 +14,7 @@ from .layout import SLOT_IDS, oled_route_lines, route_steps
 from .log import log
 from .pricing import compute_fee
 from .state import board_fresh, cutoff, load_pricing
-from .store import TransactionCancelled, op_check, op_put, op_update, set_clause
+from .store import ConditionFailed, TransactionCancelled, op_check, op_put, op_update, set_clause
 from .timeutil import epoch, from_epoch, iso, parse_iso
 
 PAID_STATUSES = ("NO_CHARGE", "PAID_CASH", "WAIVED")
@@ -119,6 +119,17 @@ def _reservation_ops(app, lead_op, session_id, plate, confidence, source_event_i
         display_command(cfg.site_id, "ENTRY_ROUTE", oled_route_lines(slot_id), now, cfg.display_command_ttl_s),
     ]
     return ops, commands
+
+
+def mark_parked(app, session_id: str, now: datetime) -> bool:
+    """Ô được gán đã báo có xe → PARKED. Gọi lại vô hại: chỉ chuyển từ RESERVED/ENTRY_GATE_OPEN."""
+    update, names, values = set_clause({"state": "PARKED", "parked_at": iso(now), "updated_at": iso(now)})
+    try:
+        app.db.update(app.cfg.tables.sessions, {"session_id": session_id}, update, "#f0 IN (:reserved, :gate_open)",
+                      {**values, ":reserved": "RESERVED", ":gate_open": "ENTRY_GATE_OPEN"}, names)
+        return True
+    except ConditionFailed:
+        return False
 
 
 def request_exit(app, lead_op: dict, session: dict, charge_end_at: datetime, from_states: tuple[str, ...],

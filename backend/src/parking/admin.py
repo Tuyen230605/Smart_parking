@@ -1,7 +1,10 @@
 """Endpoint quản trị (docs/api-contract.md §3). Mọi thay đổi cần nhóm ADMIN, Idempotency-Key và ghi audit.
 
-Idempotency không cần bảng riêng: mỗi thao tác lưu key của nó ngay trên phiên (hoặc bảng giá) trong cùng
-lần ghi có điều kiện. Gửi lại cùng key thì điều kiện sai, đọc lại thấy key khớp và trả trạng thái hiện tại.
+Idempotency, theo hai loại thao tác:
+- Chỉ thành công được một lần (xử lý OCR, thu phí, xác nhận xe qua): key lưu ngay trên phiên trong cùng lần
+  ghi có điều kiện. Gửi lại cùng key thì điều kiện sai, đọc lại thấy key khớp và trả trạng thái hiện tại.
+- Lặp lại được (mở cần ra, cấp lại QR, sửa giá): mỗi key là một dấu `idem#…` trong ProcessedMessages, ghi cùng
+  transaction và nhớ 24 giờ, để key cũ gửi lại sau một key mới hơn vẫn không chạy lần nữa.
 Không lưu bản sao response, nên không giữ dữ liệu định danh ngoài phiên và không có trạng thái "đang xử lý".
 Audit (`audit` trên phiên) ghi người làm, thời điểm, lý do; không chứa biển số hay email.
 """
@@ -20,7 +23,7 @@ from .plates import normalize_plate
 from .pricing import DEFAULT_PRICING
 from .rest import ApiError, Request, idempotency_key, json_body, text_field
 from .state import CLAIM_STATES, board_fresh, device_online
-from .store import ConditionFailed, TransactionCancelled, op_delete, op_update, set_clause
+from .store import ConditionFailed, TransactionCancelled, op_delete, op_put, op_update, set_clause
 from .timeutil import epoch, from_epoch, iso, parse_iso
 
 SESSION_STATES = (
@@ -186,22 +189,35 @@ def resolve_plate(app: App, req: Request, session_id: str):
 
 
 def renew_claim(app: App, req: Request, session_id: str):
-    """QR mới (nonce và hạn mới); QR cũ hết hiệu lực ngay. Gửi lại cùng key trả lại đúng URL đó."""
+    """QR mới (nonce và hạn mới); QR cũ hết hiệu lực ngay. Key đã dùng thì trả QR hiện tại, không cấp lại nữa."""
     now = app.clock()
     key = idempotency_key(req)
     reason = text_field(json_body(req, optional=True), "reason")
-    session = _session(app, session_id)
-    if session.get("renew_idempotency_key") != key:
-        if session["state"] not in CLAIM_STATES:
+    marker = _idempotency_id("renew-claim", key, session_id)
+    if not _idempotency_seen(app, marker):
+        if _session(app, session_id)["state"] not in CLAIM_STATES:
             raise ApiError(409, "INVALID_STATE", "Chỉ cấp lại QR cho xe còn trong bãi")
         states = {f":c{i}": s for i, s in enumerate(CLAIM_STATES)}
-        _guarded_update(app, req, session_id, "renew_idempotency_key", key, {
+        update, names, values = set_clause({
             "claim_nonce": new_nonce(),
             "claim_expires_at": iso(from_epoch(epoch(now) + app.cfg.claim_ttl_s)),
             "claim_pk": app.cfg.site_id,
             "updated_at": iso(now),
-        }, _audit(req, "renew-claim", now, reason), f"#st IN ({', '.join(states)})", states)
-        session = _session(app, session_id)
+        }, appends={"audit": [_audit(req, "renew-claim", now, reason)]})
+        try:
+            app.db.transact([
+                op_update(app.cfg.tables.sessions, {"session_id": session_id}, update,
+                          f"#st IN ({', '.join(states)})", {**values, **states}, {**names, "#st": "state"}),
+                _idempotency_op(app, marker, now),
+            ])
+        except TransactionCancelled as e:
+            if e.failed(0):
+                raise ApiError(409, "INVALID_STATE", "Phiên vừa đổi trạng thái, tải lại") from None
+            if not e.failed(1):  # failed(1): cùng key vừa chạy song song, coi như đã cấp
+                raise
+    session = _session(app, session_id)
+    if session.get("state") not in CLAIM_STATES or not session.get("claim_nonce"):
+        raise ApiError(409, "INVALID_STATE", "Phiên không còn mã QR")
     return 200, claim_summary(app, session, app.keys.keys())
 
 
@@ -242,9 +258,11 @@ def open_exit(app: App, req: Request, session_id: str):
     now = app.clock()
     key = idempotency_key(req)
     reason = text_field(json_body(req, optional=True), "reason")
+    marker = _idempotency_id("open-exit", key, session_id)
+    seen = _idempotency_seen(app, marker)
     session = _session(app, session_id)
-    if session.get("exit_open_idempotency_key") == key:
-        return 202, {"command_id": session.get("exit_command_id"), "session": _detail(session, now)}
+    if seen:
+        return 202, {"command_id": seen["command_id"], "session": _detail(session, now)}
     if session["state"] not in EXIT_OPEN_FROM or session.get("payment_status") not in PAID_STATUSES:
         raise ApiError(409, "INVALID_STATE", "Phiên chưa yêu cầu ra hoặc chưa thu tiền")
     t = app.cfg.tables
@@ -254,32 +272,30 @@ def open_exit(app: App, req: Request, session_id: str):
     update, names, values = set_clause({
         "exit_command_id": cmd["command_id"],
         "exit_open_requested_at": iso(now),
-        "exit_open_idempotency_key": key,
         "updated_at": iso(now),
     }, appends={"audit": [_audit(req, "open-exit", now, reason)]})
     states = {f":o{i}": s for i, s in enumerate(EXIT_OPEN_FROM)}
     paid = {f":p{i}": s for i, s in enumerate(PAID_STATUSES)}
-    condition = (f"#st IN ({', '.join(states)}) AND payment_status IN ({', '.join(paid)}) AND "
-                 + _unused("exit_open_idempotency_key"))
     try:
         app.db.transact([
-            op_update(t.sessions, {"session_id": session_id}, update, condition,
-                      {**values, **states, **paid, ":idem": key}, {**names, "#st": "state"}),
+            op_update(t.sessions, {"session_id": session_id}, update,
+                      f"#st IN ({', '.join(states)}) AND payment_status IN ({', '.join(paid)})",
+                      {**values, **states, **paid}, {**names, "#st": "state"}),
             command_record_op(app, cmd, session_id, ["EXIT_REQUESTED"], "EXIT_GATE_OPEN", now),
+            _idempotency_op(app, marker, now, command_id=cmd["command_id"]),
         ])
     except TransactionCancelled as e:
+        if e.failed(2):  # cùng key vừa chạy song song
+            seen = _idempotency_seen(app, marker) or {}
+            return 202, {"command_id": seen.get("command_id"), "session": _detail(_session(app, session_id), now)}
         if e.failed(0):
-            latest = _session(app, session_id)
-            if latest.get("exit_open_idempotency_key") == key:
-                return 202, {"command_id": latest.get("exit_command_id"), "session": _detail(latest, now)}
             raise ApiError(409, "INVALID_STATE", "Phiên vừa đổi trạng thái, tải lại") from None
         raise
     try:
         publish(app, [(topic, cmd)])
     except PublishFailed:
-        # Bỏ key để lần bấm lại (cùng key) phát lệnh mới thay vì trả "đã mở".
-        app.db.update(t.sessions, {"session_id": session_id}, "REMOVE exit_open_idempotency_key",
-                      "exit_open_idempotency_key = :idem", {":idem": key})
+        # Bỏ dấu key để lần bấm lại (cùng key) phát lệnh mới thay vì trả "đã mở".
+        app.db.delete(t.processed, {"message_id": marker})
         raise ApiError(503, "DEVICE_OFFLINE", "Không gửi được lệnh tới cổng, thử lại") from None
     _publish_best_effort(app, [display_command(app.cfg.site_id, "EXIT_FEE", ["RA - MOI XE QUA", "Cam on quy khach"],
                                                now, app.cfg.display_command_ttl_s)])
@@ -346,25 +362,27 @@ def put_pricing(app: App, req: Request):
         raise ApiError(400, "INVALID_INPUT", "first_block_minutes không được nhỏ hơn free_minutes")
     reason = text_field(body, "reason")
     t = app.cfg.tables
-    current = app.db.get(t.pricing, {"pricing_id": "current"})
-    if current and current.get("idempotency_key") == key:
-        return 200, _pricing_view(current)
-    version = (current or {}).get("rules", DEFAULT_PRICING)["version"]
-    update, names, values = set_clause({
-        "rules": {"version": version + 1, **rules},
-        "updated_at": iso(now),
-        "updated_by": req.actor["actor_id"],
-        "idempotency_key": key,
-    }, appends={"audit": [_audit(req, "put-pricing", now, reason, f"version {version + 1}")]})
-    try:
-        app.db.update(t.pricing, {"pricing_id": "current"}, update,
-                      "(attribute_not_exists(pricing_id) OR #r.#v = :ver) AND " + _unused("idempotency_key"),
-                      {**values, ":ver": version, ":idem": key}, {**names, "#r": "rules", "#v": "version"})
-    except ConditionFailed:
-        latest = app.db.get(t.pricing, {"pricing_id": "current"}) or {}
-        if latest.get("idempotency_key") == key:
-            return 200, _pricing_view(latest)
-        raise ApiError(409, "INVALID_STATE", "Bảng giá vừa được sửa, tải lại rồi thử lại") from None
+    marker = _idempotency_id("put-pricing", key)
+    if not _idempotency_seen(app, marker):
+        current = app.db.get(t.pricing, {"pricing_id": "current"})
+        version = (current or {}).get("rules", DEFAULT_PRICING)["version"]
+        update, names, values = set_clause({
+            "rules": {"version": version + 1, **rules},
+            "updated_at": iso(now),
+            "updated_by": req.actor["actor_id"],
+        }, appends={"audit": [_audit(req, "put-pricing", now, reason, f"version {version + 1}")]})
+        try:
+            app.db.transact([
+                op_update(t.pricing, {"pricing_id": "current"}, update,
+                          "attribute_not_exists(pricing_id) OR #r.#v = :ver",
+                          {**values, ":ver": version}, {**names, "#r": "rules", "#v": "version"}),
+                _idempotency_op(app, marker, now),
+            ])
+        except TransactionCancelled as e:
+            if e.failed(0):
+                raise ApiError(409, "INVALID_STATE", "Bảng giá vừa được sửa, tải lại rồi thử lại") from None
+            if not e.failed(1):  # failed(1): cùng key vừa chạy song song
+                raise
     return 200, _pricing_view(app.db.get(t.pricing, {"pricing_id": "current"}))
 
 
@@ -379,6 +397,25 @@ def _session(app: App, session_id: str) -> dict:
 
 def _unused(field: str) -> str:
     return f"(attribute_not_exists({field}) OR {field} <> :idem)"
+
+
+def _idempotency_id(action: str, key: str, scope: str = "") -> str:
+    return f"idem#{action}#{scope}#{key}"
+
+
+def _idempotency_seen(app: App, marker_id: str) -> dict | None:
+    return app.db.get(app.cfg.tables.processed, {"message_id": marker_id})
+
+
+def _idempotency_op(app: App, marker_id: str, now: datetime, **extra) -> dict:
+    """Dấu key cho thao tác lặp lại được; ghi cùng transaction với thao tác, tự xóa sau 24 giờ (TTL)."""
+    return op_put(app.cfg.tables.processed, {
+        "message_id": marker_id,
+        "kind": "idempotency",
+        "created_at": iso(now),
+        "ttl": epoch(now) + app.cfg.idempotency_ttl_s,
+        **extra,
+    }, "attribute_not_exists(message_id)")
 
 
 def _audit(req: Request, action: str, now: datetime, reason: str | None = None, detail: str | None = None) -> dict:

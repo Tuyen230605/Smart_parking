@@ -1,7 +1,7 @@
 """Lambda chạy theo lịch (EventBridge Scheduler), payload `{"job": ...}`:
 
 - `expire_reservations` (mỗi phút): phiên giữ ô quá 5 phút mà ô chưa báo có xe → EXPIRED, bỏ giữ ô khi ô
-  vẫn trống, bỏ khóa biển số và QR (UC-05, SIM-13).
+  vẫn trống, bỏ khóa biển số và QR (UC-05, SIM-13). Ô đã có xe mà phiên chưa PARKED thì chuyển PARKED.
 - `purge_identity` (mỗi giờ): xóa biển số/email của phiên tới `purge_due_at` (9 ngày 23 giờ), kể cả phiên
   còn mở; dashboard cảnh báo trước 24 giờ để quản trị đóng phiên (UC-10, SIM-16).
 
@@ -10,6 +10,7 @@ Cả hai idempotent: chạy lại hay chạy chồng không đổi kết quả. 
 from datetime import datetime
 
 from .app import App, get_app
+from .flows import mark_parked
 from .log import log
 from .state import cutoff
 from .store import TransactionCancelled, op_delete, op_update, set_clause
@@ -31,26 +32,25 @@ def handler(event, _context):
 def expire_reservations(app: App) -> dict:
     now = app.clock()
     late = cutoff(now, app.cfg.reservation_timeout_s)
-    expired = skipped = 0
+    counts = {"expired": 0, "parked": 0, "skipped": 0}
     for state in UNPARKED_STATES:
         # Index đọc không nhất quán ngay: điều kiện trong transaction mới là chốt chặn.
         for session in app.db.query(app.cfg.tables.sessions, "#s = :s AND created_at <= :late",
                                     {":s": state, ":late": late}, {"#s": "state"}, index="by_state"):
-            if _expire(app, session["session_id"], now):
-                expired += 1
-            else:
-                skipped += 1
-    return {"expired": expired, "skipped": skipped}
+            counts[_expire(app, session["session_id"], now)] += 1
+    return counts
 
 
-def _expire(app: App, session_id: str, now: datetime) -> bool:
+def _expire(app: App, session_id: str, now: datetime) -> str:
+    """Trả "expired", "parked" hoặc "skipped"."""
     t = app.cfg.tables
     session = app.db.get(t.sessions, {"session_id": session_id})
     if not session or session.get("state") not in UNPARKED_STATES:
-        return False
+        return "skipped"
     slot = session.get("slot_id") and app.db.get(t.slots, {"slot_id": session["slot_id"]})
     if slot and slot.get("reserved_session_id") == session_id and slot.get("occupied"):
-        return False  # xe đang ở ô: ACK/cảm biến sẽ chuyển PARKED, không giải phóng
+        # Xe đã ở đúng ô nhưng phiên chưa sang PARKED (ingest lỗi giữa chừng): sửa lại thay vì để kẹt mãi.
+        return "parked" if mark_parked(app, session_id, now) else "skipped"
     update, names, values = set_clause({
         "state": "EXPIRED",
         "expired_at": iso(now),
@@ -69,9 +69,9 @@ def _expire(app: App, session_id: str, now: datetime) -> bool:
     try:
         app.db.transact(ops)
     except TransactionCancelled:
-        return False  # phiên vừa đỗ hoặc ô vừa có xe: lần chạy sau xét lại
+        return "skipped"  # phiên vừa đỗ hoặc ô vừa có xe: lần chạy sau xét lại
     log("reservation_expired", session_id=session_id, slot_id=session.get("slot_id"))
-    return True
+    return "expired"
 
 
 def purge_identity(app: App) -> dict:

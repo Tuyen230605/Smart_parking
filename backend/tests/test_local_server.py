@@ -45,7 +45,7 @@ def test_local_server_end_to_end(app, base_url):
 
     status, _, page = request(f"{base_url}/v1/admin/sessions?status=PARKED&limit=5")
     assert status == 200 and len(page["sessions"]) == 1
-    assert request(f"{base_url}/dev/jobs/expire_reservations", "POST")[2] == {"expired": 0, "skipped": 0}
+    assert request(f"{base_url}/dev/jobs/expire_reservations", "POST")[2] == {"expired": 0, "parked": 0, "skipped": 0}
 
 
 def test_local_server_cors_and_errors(base_url):

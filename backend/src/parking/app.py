@@ -22,11 +22,24 @@ class Mailer(Protocol):
 
 
 class IotPublisher:
+    """Phát qua endpoint dữ liệu riêng của tài khoản (`iot:Data-ATS`). Endpoint mặc định của boto3
+    (`data-ats.iot.<region>`) AWS chỉ dành để thử, nên lấy endpoint thật một lần cho mỗi container."""
+
     def __init__(self, endpoint: str = ""):
-        self.client = boto3.client("iot-data", **({"endpoint_url": endpoint} if endpoint else {}))
+        self._endpoint = endpoint
+        self._client = None
+
+    def client(self):
+        if self._client is None:
+            endpoint = self._endpoint or \
+                boto3.client("iot").describe_endpoint(endpointType="iot:Data-ATS")["endpointAddress"]
+            if not endpoint.startswith("https://"):
+                endpoint = f"https://{endpoint}"
+            self._client = boto3.client("iot-data", endpoint_url=endpoint)
+        return self._client
 
     def publish(self, topic: str, payload: dict) -> None:
-        self.client.publish(topic=topic, qos=1, payload=json.dumps(payload, ensure_ascii=False).encode())
+        self.client().publish(topic=topic, qos=1, payload=json.dumps(payload, ensure_ascii=False).encode())
 
 
 class SesMailer:

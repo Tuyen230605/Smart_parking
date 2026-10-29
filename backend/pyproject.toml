@@ -12,6 +12,7 @@ dev = [
   "moto[dynamodb]>=5.0",
   "paho-mqtt>=2.0",
   "pytest>=8",
+  "pyyaml>=6",
 ]
 
 [tool.uv]

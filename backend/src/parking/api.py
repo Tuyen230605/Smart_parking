@@ -95,18 +95,24 @@ def post_claim_email(app: App, req: Request, token: str):
     email = email.strip() if isinstance(email, str) else ""
     if len(email) > 254 or not EMAIL_RE.fullmatch(email) or consent is not True:
         raise ApiError(400, "INVALID_INPUT", "Email không hợp lệ hoặc chưa đồng ý nhận email")
+    email_expires = now + timedelta(seconds=app.cfg.identity_retention_s)
     update, names, values = set_clause({
         "email_status": "QUEUED",
         "email": email,
         "email_collected_at": iso(now),
-        "email_expires_at": iso(now + timedelta(seconds=app.cfg.identity_retention_s)),
+        "email_expires_at": iso(email_expires),
         "email_idempotency_key": key,
         "updated_at": iso(now),
+        "pii_pk": app.cfg.site_id,
     })
+    # Đưa phiên vào lịch purge. Bình thường đã có hạn từ biển số (sớm hơn) nên giữ nguyên; nếu biển số đã bị
+    # purge (phiên mở quá 10 ngày rồi được cấp lại QR) thì lấy hạn của email, để email không nằm lại mãi.
+    update += ", purge_due_at = if_not_exists(purge_due_at, :email_purge_due)"
     try:
         app.db.update(t.sessions, {"session_id": session["session_id"]}, update,
                       "attribute_not_exists(#f0) AND claim_nonce = :nonce AND claim_expires_at > :now_iso",
-                      {**values, ":nonce": session["claim_nonce"], ":now_iso": iso(now)}, names)
+                      {**values, ":nonce": session["claim_nonce"], ":now_iso": iso(now),
+                       ":email_purge_due": iso(email_expires - timedelta(seconds=app.cfg.purge_lead_s))}, names)
     except ConditionFailed:
         latest = app.db.get(t.sessions, {"session_id": session["session_id"]}) or {}
         if latest.get("email_idempotency_key") == key:

@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -68,3 +69,20 @@ def test_keyring_reloads_after_ttl():
 def test_timestamps_need_timezone(value):
     with pytest.raises(ValueError):
         parse_iso(value)
+
+
+def test_iot_publisher_uses_account_endpoint(monkeypatch):
+    """Codex #1: không dùng endpoint chung `data-ats.iot.<region>` của boto3 mà lấy endpoint riêng của tài khoản."""
+    from moto import mock_aws
+
+    from parking.app import IotPublisher
+
+    for name, value in {"AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "x",
+                        "AWS_DEFAULT_REGION": "ap-southeast-2"}.items():
+        monkeypatch.setenv(name, value)
+    with mock_aws():
+        url = IotPublisher().client().meta.endpoint_url
+    # Dạng <tiền tố riêng của tài khoản>-ats.iot.<region>.amazonaws.com (moto sinh tiền tố ngẫu nhiên).
+    assert re.fullmatch(r"https://[a-z0-9]+-ats\.iot\.ap-southeast-2\.amazonaws\.com", url), url
+    assert IotPublisher("https://abc-ats.iot.ap-southeast-2.amazonaws.com").client().meta.endpoint_url \
+        == "https://abc-ats.iot.ap-southeast-2.amazonaws.com"

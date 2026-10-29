@@ -713,6 +713,7 @@ dev = [
     { name = "moto", extra = ["dynamodb"] },
     { name = "paho-mqtt" },
     { name = "pytest" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -723,6 +724,7 @@ dev = [
     { name = "moto", extras = ["dynamodb"], specifier = ">=5.0" },
     { name = "paho-mqtt", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [[package]]

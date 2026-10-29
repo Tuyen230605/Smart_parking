@@ -9,13 +9,13 @@ from datetime import datetime
 
 from .app import App, get_app
 from .contract import SLOTS, InvalidMessage, display_command, parse_inbound
-from .flows import (base_session, identity_fields, marker_op, publish, put_session_op, request_exit,
+from .flows import (base_session, identity_fields, mark_parked, marker_op, publish, put_session_op, request_exit,
                     reserve_slot)
 from .ids import new_ulid
 from .layout import SLOT_IDS, source_of
 from .log import log
 from .plates import normalize_plate
-from .store import ConditionFailed, TransactionCancelled, set_clause
+from .store import ConditionFailed, TransactionCancelled, op_check, op_update, set_clause
 from .timeutil import iso
 
 VALID_LANES = {("ENTRY", "GREEN"), ("EXIT", "RED")}
@@ -139,12 +139,28 @@ def _manual_review(app: App, msg: dict, plate: str | None, reason: str, now: dat
 
 # ---------- Ô đỗ ----------
 
+SNAPSHOT_IS_OLDER = "attribute_not_exists(snapshot_seq) OR snapshot_boot_id <> :boot OR snapshot_seq < :seq"
+SLOT_IS_OLDER = "attribute_not_exists(src_seq) OR src_boot_id <> :boot OR src_seq < :seq"
+
+
 def on_slot_changed(app: App, msg: dict, now: datetime) -> str:
-    return _apply_slot(app, msg, msg["slot_id"], msg["occupied"], now)
+    # Snapshot không ghi lại ô không đổi, nên phải so cả với seq của snapshot đã nhận: nếu không, một
+    # slot_changed đến trễ có thể đổi ô đang có xe thành trống và cho xe khác vào.
+    return _apply_slot(app, msg, msg["slot_id"], msg["occupied"], now, check_snapshot=True)
 
 
 def on_slots_snapshot(app: App, msg: dict, now: datetime) -> str:
+    """Ghi các ô trước, đánh dấu snapshot đã nhận sau cùng: lỗi giữa chừng thì Lambda retry làm lại được,
+    và ô không bị coi là "dữ liệu mới" khi chưa ghi xong."""
     t = app.cfg.tables
+    board = app.db.get(t.devices, {"device_id": SLOTS})
+    if board and board.get("snapshot_boot_id") == msg["boot_id"] and board.get("snapshot_seq", -1) >= msg["seq"]:
+        return "STALE"
+    current = {s["slot_id"]: s for s in app.db.batch_get(t.slots, [{"slot_id": sid} for sid in SLOT_IDS])}
+    # Chỉ ghi ô đổi trạng thái: snapshot 30 giây/lần, ghi cả 18 ô sẽ tốn WCU vô ích.
+    changed = [s for s in msg["slots"] if current.get(s["slot_id"], {}).get("occupied") != s["occupied"]]
+    for s in changed:
+        _apply_slot(app, msg, s["slot_id"], s["occupied"], now)
     update, names, values = set_clause({
         "last_snapshot_at": iso(now),
         "last_seen_at": iso(now),
@@ -152,21 +168,18 @@ def on_slots_snapshot(app: App, msg: dict, now: datetime) -> str:
         "snapshot_seq": msg["seq"],
     })
     try:
-        app.db.update(t.devices, {"device_id": SLOTS}, update,
-                      "attribute_not_exists(snapshot_seq) OR snapshot_boot_id <> :boot OR snapshot_seq < :seq",
+        app.db.update(t.devices, {"device_id": SLOTS}, update, SNAPSHOT_IS_OLDER,
                       {**values, ":boot": msg["boot_id"], ":seq": msg["seq"]}, names)
     except ConditionFailed:
-        return "STALE"
-    current = {s["slot_id"]: s for s in app.db.batch_get(t.slots, [{"slot_id": sid} for sid in SLOT_IDS])}
-    # Chỉ ghi ô đổi trạng thái: snapshot 30 giây/lần, ghi cả 18 ô sẽ tốn WCU vô ích.
-    changed = [s for s in msg["slots"] if current.get(s["slot_id"], {}).get("occupied") != s["occupied"]]
-    for s in changed:
-        _apply_slot(app, msg, s["slot_id"], s["occupied"], now)
+        return "STALE"  # snapshot mới hơn vừa được ghi
     return f"SNAPSHOT:{len(changed)}"
 
 
-def _apply_slot(app: App, msg: dict, slot_id: str, occupied: bool, now: datetime) -> str:
-    """Ghi tín hiệu hiện trường; bỏ message cũ hơn trong cùng boot_id. Không đụng `reserved_session_id`."""
+def _apply_slot(app: App, msg: dict, slot_id: str, occupied: bool, now: datetime, check_snapshot: bool = False) -> str:
+    """Ghi tín hiệu hiện trường, bỏ message cũ hơn trong cùng boot_id. Không đụng `reserved_session_id`.
+
+    Dù message đã được ghi ở lần chạy trước (Lambda retry), vẫn chuyển phiên sang PARKED nếu lần trước lỗi giữa chừng.
+    """
     t = app.cfg.tables
     update, names, values = set_clause({
         "occupied": occupied,
@@ -175,22 +188,21 @@ def _apply_slot(app: App, msg: dict, slot_id: str, occupied: bool, now: datetime
         "src_seq": msg["seq"],
         "updated_at": iso(now),
     })
+    seq = {":boot": msg["boot_id"], ":seq": msg["seq"]}
+    ops = [op_update(t.slots, {"slot_id": slot_id}, update, SLOT_IS_OLDER, {**values, **seq}, names)]
+    if check_snapshot:
+        ops.append(op_check(t.devices, {"device_id": SLOTS}, SNAPSHOT_IS_OLDER, seq))
     try:
-        slot = app.db.update(t.slots, {"slot_id": slot_id}, update,
-                             "attribute_not_exists(src_seq) OR src_boot_id <> :boot OR src_seq < :seq",
-                             {**values, ":boot": msg["boot_id"], ":seq": msg["seq"]}, names, return_new=True)
-    except ConditionFailed:
-        return f"STALE:{slot_id}"
-    session_id = slot.get("reserved_session_id")
-    if occupied and session_id:
-        update, names, values = set_clause({"state": "PARKED", "parked_at": iso(now), "updated_at": iso(now)})
-        try:
-            app.db.update(t.sessions, {"session_id": session_id}, update, "#f0 IN (:reserved, :gate_open)",
-                          {**values, ":reserved": "RESERVED", ":gate_open": "ENTRY_GATE_OPEN"}, names)
-            return f"PARKED:{slot_id}"
-        except ConditionFailed:
-            pass
-    return f"{'OCCUPIED' if occupied else 'FREE'}:{slot_id}"
+        app.db.transact(ops)
+        outcome = f"{'OCCUPIED' if occupied else 'FREE'}:{slot_id}"
+    except TransactionCancelled as e:
+        if not any(e.failed(i) for i in range(len(ops))):
+            raise
+        outcome = f"STALE:{slot_id}"
+    slot = app.db.get(t.slots, {"slot_id": slot_id}) or {}
+    if slot.get("occupied") and slot.get("reserved_session_id") and mark_parked(app, slot["reserved_session_id"], now):
+        return f"PARKED:{slot_id}"
+    return outcome
 
 
 # ---------- Cổng, OLED, thiết bị ----------

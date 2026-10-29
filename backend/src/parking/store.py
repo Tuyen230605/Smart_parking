@@ -155,6 +155,14 @@ class Db:
             raise
         return unmarshal(r["Attributes"]) if return_new else None
 
+    def delete(self, table, key, condition=None, values=None, names=None):
+        try:
+            self.client.delete_item(TableName=table, Key=marshal(key), **_expr(condition, values, names))
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise ConditionFailed() from None
+            raise
+
     def query(self, table, key_condition, values, names=None, index=None, filter=None, descending=False) -> list[dict]:
         kwargs = {"TableName": table, "KeyConditionExpression": key_condition, "ScanIndexForward": not descending,
                   **_expr(None, values, names, IndexName=index, FilterExpression=filter)}

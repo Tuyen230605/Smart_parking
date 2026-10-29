@@ -83,6 +83,32 @@ def test_failed_publish_lets_same_key_retry(app, monkeypatch):
     assert len(app.publisher.of_type("gate_command")) == 2  # lệnh vào + lệnh ra
 
 
+def test_old_key_resent_after_newer_key_is_not_repeated(app):
+    """Codex #7: gửi key A, rồi B, rồi gửi lại A thì A không được chạy lần nữa."""
+    sid = parked_then_exit(app, minutes=5)
+    base = f"/admin/sessions/{sid}"
+    first = admin(app, "POST", f"{base}/open-exit", n=1)[1]["command_id"]
+    admin(app, "POST", f"{base}/open-exit", n=2)
+    assert admin(app, "POST", f"{base}/open-exit", n=1)[1]["command_id"] == first
+    assert len([c for c in app.publisher.of_type("gate_command") if c["gate"] == "EXIT"]) == 2
+
+    rules = {"free_minutes": 10, "first_block_minutes": 60, "first_block_vnd": 20000, "extra_hour_vnd": 8000}
+    admin(app, "PUT", "/admin/pricing", rules, n=11)
+    admin(app, "PUT", "/admin/pricing", {**rules, "extra_hour_vnd": 9000}, n=12)
+    assert admin(app, "PUT", "/admin/pricing", rules, n=11)[1] == admin(app, "GET", "/admin/pricing")[1]
+    assert admin(app, "GET", "/admin/pricing")[1]["version"] == 3
+
+
+def test_old_renew_key_does_not_rotate_qr_again(app):
+    entered(app)
+    sid = slot_of(app, "F1-A1")["reserved_session_id"]
+    admin(app, "POST", f"/admin/sessions/{sid}/renew-claim", n=1)
+    second = admin(app, "POST", f"/admin/sessions/{sid}/renew-claim", n=2)[1]["claim_url"]
+    nonce = session_of(app, sid)["claim_nonce"]
+    assert admin(app, "POST", f"/admin/sessions/{sid}/renew-claim", n=1)[1]["claim_url"] == second
+    assert session_of(app, sid)["claim_nonce"] == nonce
+
+
 def test_resolve_low_confidence_entry(app):
     ingest.process(app, snapshot(app))
     assert ingest.process(app, vehicle(app, confidence=0.4)) == "MANUAL_REVIEW:LOW_CONFIDENCE"

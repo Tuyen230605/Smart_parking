@@ -35,6 +35,8 @@ class Config:
     # Purge chạy theo giờ nên bắt đầu xóa sớm hơn hạn 10 ngày một giờ.
     purge_lead_s: int = 3600
     processed_ttl_s: int = 7 * 24 * 3600
+    # Nhớ Idempotency-Key của thao tác lặp lại được (mở cần ra, cấp lại QR, sửa giá) trong thời gian này.
+    idempotency_ttl_s: int = 24 * 3600
 
     @classmethod
     def from_env(cls, env=os.environ) -> "Config":
