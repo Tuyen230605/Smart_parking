@@ -9,16 +9,15 @@ from moto import mock_aws
 
 from parking.app import App
 from parking.claims import KeyRing
-from parking.config import Config, Tables
+from parking.config import Config
 from parking.layout import SLOT_IDS, source_of
 from parking.store import Db
 from parking.timeutil import iso
+from schema import LOCAL_TABLES as TABLES, create_tables
 
 KEY = "test-key-0123456789abcdefghijklmnopqrstuvwxyz"
 SITE = "site-01"
 BOOT = "91270fd2-a4ad-4ccf-a11d-af3657c4e32e"
-TABLES = Tables(slots="slots", sessions="sessions", active_plates="active-plates", processed="processed",
-                devices="devices", pricing="pricing")
 
 
 class Clock:
@@ -53,37 +52,6 @@ class FakeMailer:
             raise RuntimeError("SES từ chối")
         self.sent.append((to, subject, text))
         return f"msg-{len(self.sent)}"
-
-
-def _table(client, name, key, indexes=()):
-    attrs = {key}
-    gsis = []
-    for index_name, pk, sk, projection in indexes:
-        attrs |= {pk, sk}
-        gsis.append({"IndexName": index_name,
-                     "KeySchema": [{"AttributeName": pk, "KeyType": "HASH"}, {"AttributeName": sk, "KeyType": "RANGE"}],
-                     "Projection": projection})
-    kwargs = {"GlobalSecondaryIndexes": gsis} if gsis else {}
-    client.create_table(TableName=name, BillingMode="PAY_PER_REQUEST",
-                        AttributeDefinitions=[{"AttributeName": a, "AttributeType": "S"} for a in sorted(attrs)],
-                        KeySchema=[{"AttributeName": key, "KeyType": "HASH"}], **kwargs)
-
-
-def create_tables(client):
-    """Giống infra/aws/template.yaml."""
-    _table(client, TABLES.slots, "slot_id")
-    _table(client, TABLES.sessions, "session_id", [
-        ("by_state", "state", "created_at", {"ProjectionType": "ALL"}),
-        ("by_site", "site_id", "created_at", {"ProjectionType": "ALL"}),
-        ("active_claims", "claim_pk", "claim_expires_at",
-         {"ProjectionType": "INCLUDE",
-          "NonKeyAttributes": ["state", "session_ref", "slot_id", "claim_nonce", "created_at"]}),
-        ("purge_due", "pii_pk", "purge_due_at", {"ProjectionType": "KEYS_ONLY"}),
-    ])
-    _table(client, TABLES.active_plates, "plate_normalized")
-    _table(client, TABLES.processed, "message_id")
-    _table(client, TABLES.devices, "device_id")
-    _table(client, TABLES.pricing, "pricing_id")
 
 
 @pytest.fixture

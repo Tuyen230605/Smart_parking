@@ -14,12 +14,18 @@ Parameters:
     Default: site-01
   WebBaseUrl:
     Type: String
-    Default: http://localhost:5173
-    Description: URL gốc web app, dùng để tạo link QR /s/{token}. Không có dấu / ở cuối.
+    Default: ""
+    Description: URL gốc web app cho link QR /s/{token}, không có dấu / cuối. Bỏ trống để dùng domain CloudFront của stack.
+  # String thay vì CommaDelimitedList: SAM thay giá trị tham số vào CorsConfiguration dưới dạng chuỗi.
   CorsOrigins:
-    Type: CommaDelimitedList
+    Type: String
     Default: http://localhost:5173
-    Description: Các origin web được gọi API, phân cách bằng dấu phẩy.
+    AllowedPattern: "^https?://[^,]+(,https?://[^,]+)*$"
+    Description: Origin được gọi API ngoài URL web ở trên (không lặp lại URL đó), phân cách bằng dấu phẩy.
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Email nhận cảnh báo lỗi (phải bấm xác nhận thư từ SNS). Bỏ trống thì alarm không gửi đi đâu.
   SesSender:
     Type: String
     Description: Địa chỉ gửi đã xác minh trong SES.
@@ -28,6 +34,10 @@ Parameters:
     Default: /smart-parking/dev/claim-keys
     AllowedPattern: "^/.+"
     Description: Tên SSM SecureString chứa khóa HMAC ký QR (tạo bằng CLI trước khi deploy).
+
+Conditions:
+  UseCloudFrontUrl: !Equals [!Ref WebBaseUrl, ""]
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
 
 Globals:
   Function:
@@ -45,7 +55,7 @@ Globals:
         PROCESSED_TABLE: !Ref ProcessedTable
         DEVICES_TABLE: !Ref DevicesTable
         PRICING_TABLE: !Ref PricingTable
-        WEB_BASE_URL: !Ref WebBaseUrl
+        WEB_BASE_URL: !If [UseCloudFrontUrl, !Sub "https://${WebDistribution.DomainName}", !Ref WebBaseUrl]
         SES_SENDER: !Ref SesSender
         CLAIM_KEYS_PARAM: !Ref ClaimKeysParam
 
@@ -254,7 +264,12 @@ Resources:
     Properties:
       StageName: v1
       CorsConfiguration:
-        AllowOrigins: !Ref CorsOrigins
+        AllowOrigins: !Split
+          - ","
+          - !Join
+            - ","
+            - - !If [UseCloudFrontUrl, !Sub "https://${WebDistribution.DomainName}", !Ref WebBaseUrl]
+              - !Ref CorsOrigins
         AllowMethods: [GET, POST, PUT, OPTIONS]
         AllowHeaders: [Authorization, Content-Type, Idempotency-Key]
         MaxAge: 600
@@ -273,6 +288,178 @@ Resources:
         "POST /public/claims/{token}/email":
           ThrottlingBurstLimit: 5
           ThrottlingRateLimit: 1
+
+  # ---------- Job theo lịch (EventBridge Scheduler) ----------
+  JobsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-parking-${Stage}-jobs
+      Handler: parking.jobs.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+      Events:
+        ExpireReservations:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 minute)
+            Input: '{"job": "expire_reservations"}'
+            RetryPolicy: {MaximumRetryAttempts: 0}
+        PurgeIdentity:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 hour)
+            Input: '{"job": "purge_identity"}'
+            RetryPolicy: {MaximumRetryAttempts: 2}
+
+  JobsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${JobsFunction}
+      RetentionInDays: 7
+
+  # ---------- Cảnh báo lỗi ----------
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmEmail
+    Properties:
+      TopicName: !Sub smart-parking-${Stage}-alarms
+      Subscription:
+        - {Protocol: email, Endpoint: !Ref AlarmEmail}
+
+  # Job lỗi = purge có thể trễ hạn 10 ngày (docs/aws-deployment.md §6).
+  JobsErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-parking-${Stage}-jobs-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref JobsFunction}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  # Ingest lỗi gồm cả trường hợp không phát được lệnh cổng/OLED.
+  IngestErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-parking-${Stage}-ingest-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref IngestFunction}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  # Lambda API tự bắt lỗi và trả 500/503, nên đo ở API Gateway thay vì Errors của Lambda.
+  ApiServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-parking-${Stage}-api-5xx
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - {Name: ApiId, Value: !Ref HttpApi}
+        - {Name: Stage, Value: v1}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  # ---------- Web: S3 riêng tư + CloudFront ----------
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub ${WebBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}
+
+  WebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub smart-parking-${Stage}-web
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Route SPA (/s/{token}, /kiosk, /admin/...) không phải file trong S3: trả index.html.
+  # Token QR có dấu chấm nên /s/* luôn được viết lại, không dựa vào đuôi file.
+  SpaRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub smart-parking-${Stage}-spa-rewrite
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Trả index.html cho route của web app
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          var last = uri.substring(uri.lastIndexOf('/') + 1);
+          if (uri.indexOf('/s/') === 0 || last.indexOf('.') === -1) {
+            request.uri = '/index.html';
+          }
+          return request;
+        }
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub smart-parking-${Stage} web
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        # Có edge châu Á cho người dùng ở Việt Nam.
+        PriceClass: PriceClass_200
+        Origins:
+          - Id: web-s3
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+            S3OriginConfig: {OriginAccessIdentity: ""}
+        DefaultCacheBehavior:
+          TargetOriginId: web-s3
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6          # Managed-CachingOptimized
+          # Managed-SecurityHeadersPolicy: Referrer-Policy strict-origin-when-cross-origin để token QR
+          # trong URL không lọt sang trang khác, kèm HSTS/nosniff/frame-options.
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewriteFunction.FunctionMetadata.FunctionARN
 
   # ---------- Cognito: tài khoản ADMIN/KIOSK do quản trị tạo ----------
   UserPool:
@@ -383,6 +570,12 @@ Outputs:
   ApiUrl:
     Description: Điền vào VITE_API_BASE_URL của web.
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/v1
+  WebUrl:
+    Value: !If [UseCloudFrontUrl, !Sub "https://${WebDistribution.DomainName}", !Ref WebBaseUrl]
+  WebBucketName:
+    Value: !Ref WebBucket
+  WebDistributionId:
+    Value: !Ref WebDistribution
   UserPoolId:
     Value: !Ref UserPool
   UserPoolClientId:

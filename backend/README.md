@@ -10,9 +10,36 @@ Python 3.12, chỉ dùng boto3 có sẵn trong runtime Lambda. Hạ tầng và c
 
 ```bash
 cd backend
-uv sync              # tạo .venv với boto3, moto, pytest
+uv sync              # tạo .venv với boto3, moto, pytest, paho-mqtt
 uv run pytest        # DynamoDB giả bằng moto, không cần tài khoản AWS
 ```
+
+## Chạy local cho web và mock thiết bị (không cần AWS)
+
+[`local/dev_server.py`](local/dev_server.py) chạy cùng code Lambda với DynamoDB giả trong RAM. Mọi request được coi như đã đăng nhập nhóm `ADMIN` và `KIOSK`; email chỉ in ra màn hình.
+
+```bash
+cd backend
+uv run python local/dev_server.py --fake-slots          # API http://localhost:3001/v1, slots-01 giả
+```
+
+Web: đặt `VITE_API_BASE_URL=http://localhost:3001/v1` trong `web/.env.local`. Giả thiết bị bằng HTTP:
+
+```bash
+curl -X POST localhost:3001/dev/slots/F1-A2 -d '{"occupied": true}'   # ô có xe
+curl -X POST localhost:3001/dev/mqtt -d @event.json                   # message MQTT v1 kèm "mqtt_topic"
+curl -X POST localhost:3001/dev/jobs/expire_reservations              # chạy job ngay
+```
+
+Nối với mock thiết bị thật qua Mosquitto (lệnh cổng/OLED được phát lại lên broker):
+
+```bash
+docker run --rm -p 1883:1883 eclipse-mosquitto:2.0.21 mosquitto -c /mosquitto-no-auth.conf
+uv run python local/dev_server.py --mqtt localhost:1883 --fake-slots
+python ../edge/raspberry-pi-vision/mock_pi.py entry-ok                # từ thư mục có config.toml của Pi
+```
+
+Bỏ `--fake-slots` khi `mock_slots.py` của người 3 đã chạy, để hai nguồn không ghi đè nhau.
 
 ## Cấu trúc `src/parking/`
 
@@ -21,6 +48,7 @@ uv run pytest        # DynamoDB giả bằng moto, không cần tài khoản AWS
 | `ingest.py` | Lambda nhận MQTT qua IoT Rule: xe vào/ra, trạng thái ô, ACK cổng/OLED, trạng thái thiết bị |
 | `api.py` | Lambda HTTP API: định tuyến, `/public/*`, `/kiosk/active-claims`, `/admin/dashboard` |
 | `admin.py` | Endpoint quản trị còn lại: phiên, xử lý OCR, QR, thu phí, cổng ra, thiết bị, bảng giá |
+| `jobs.py` | Lambda theo lịch: hết hạn giữ ô (mỗi phút), xóa dữ liệu định danh (mỗi giờ) |
 | `flows.py` | Giữ ô và khóa phí ra, dùng chung cho sự kiện thiết bị và thao tác quản trị |
 | `rest.py` | Đọc event API Gateway, lỗi chuẩn, kiểm nhóm Cognito, Idempotency-Key |
 | `contract.py` | Kiểm message MQTT v1 và tạo `gate_command`/`display_command` |
@@ -30,6 +58,8 @@ uv run pytest        # DynamoDB giả bằng moto, không cần tài khoản AWS
 | `layout.py`, `pricing.py`, `plates.py` | 18 ô và lộ trình, bảng giá, chuẩn hóa biển số |
 | `app.py`, `config.py` | Ghép boto3/IoT/SES và đọc biến môi trường |
 
+`local/` không đóng gói vào Lambda: `dev_server.py` (API local) và `schema.py` (bảng DynamoDB cho test và chạy local).
+
 ## Trạng thái phiên
 
 ```text
@@ -38,9 +68,14 @@ RESERVED → ENTRY_GATE_OPEN → PARKED → EXIT_REQUESTED (0 ₫) ────�
    └───────────────────────────────────┘                                   ↓ open-exit + ACK
                                                                     EXIT_GATE_OPEN → confirm-passage → CLOSED
 MANUAL_REVIEW → RESOLVED (cho vào: phiên RESERVED mới; cho ra: khóa phí phiên đang đỗ) | DISMISSED
+RESERVED / ENTRY_GATE_OPEN ── 5 phút ô không báo xe ──→ EXPIRED (bỏ giữ ô nếu ô vẫn trống, bỏ khóa biển số và QR)
 ```
 
-`EXPIRED` (giữ ô quá 5 phút) thuộc đợt 3.
+## Job theo lịch
+
+- **`expire_reservations` mỗi phút** (UC-05, SIM-13): phiên giữ ô quá 5 phút chưa đỗ → `EXPIRED`. Ô đang báo có xe thì không giải phóng, lần chạy sau xét lại. Dashboard báo số lượt hết hạn trong 1 giờ qua.
+- **`purge_identity` mỗi giờ** (UC-10, SIM-16): phiên tới `purge_due_at` (9 ngày 23 giờ) bị xóa biển số, email, QR và khóa `ActivePlates`; giữ phí, thời gian, audit. Phiên còn mở cũng bị xóa đúng hạn; dashboard cảnh báo trước 24 giờ để quản trị đóng phiên.
+- Cả hai idempotent; job lỗi thì Lambda báo lỗi và alarm gửi email.
 
 ## Endpoint quản trị
 
@@ -86,5 +121,7 @@ Cần đưa vào PR hợp đồng v1.1 để nhóm duyệt:
 
 ## Chưa làm
 
-- **Đợt 3:** job theo lịch (giải phóng ô giữ quá 5 phút → `EXPIRED`, purge 10 ngày), alarm CloudWatch, S3 + CloudFront cho web, script tạo certificate thiết bị, chạy API local cho web.
-- Gửi lại email (`resend`) và sửa thủ công trạng thái ô/`OUT_OF_SERVICE` chưa có endpoint.
+- Gửi lại email (`resend`) và đánh dấu ô `OUT_OF_SERVICE` chưa có endpoint.
+- Phần web của người 4: `web/src/auth.ts` (Cognito) và trang `/admin` dùng các endpoint trên.
+- PR hợp đồng v1.1 cho 10 điểm khác ở trên.
+- Deploy lên AWS thật và chạy SIM-01 → SIM-16 với thiết bị (người 4 tự deploy theo [infra/aws](../infra/aws/README.md)).

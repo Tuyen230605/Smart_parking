@@ -14,6 +14,7 @@ from .claims import InvalidToken, verify_claim
 from .contract import DEVICES, GATE, SLOTS
 from .flows import claim_summary
 from .ids import new_uuid
+from .jobs import CLOSED_STATES
 from .layout import SLOT_IDS, route_steps, source_of
 from .log import log
 from .rest import ApiError, Request, authorize, idempotency_key, json_body, parse_event, response
@@ -204,10 +205,24 @@ def _alerts(app: App, slots: dict, devices: dict, offline: list, fresh: bool, no
     for lane in ("entry", "exit"):
         if gate.get(f"{lane}_gate_state") == "ERROR":
             alerts.append(f"Cần {lane.upper()} báo lỗi {gate.get(f'{lane}_gate_error') or 'không rõ'}")
-    review = app.db.query(app.cfg.tables.sessions, "#s = :s", {":s": "MANUAL_REVIEW"}, {"#s": "state"},
-                          index="by_state")
+    t = app.cfg.tables
+    review = app.db.query(t.sessions, "#s = :s", {":s": "MANUAL_REVIEW"}, {"#s": "state"}, index="by_state")
     if review:
         alerts.append(f"{len(review)} lượt chờ quản trị xử lý")
+    hour_ago = cutoff(now, 3600)
+    expired = app.db.query(t.sessions, "#s = :s AND created_at >= :since",
+                           {":s": "EXPIRED", ":since": cutoff(now, 3600 + app.cfg.reservation_timeout_s)},
+                           {"#s": "state"}, index="by_state")
+    expired = [s for s in expired if s.get("expired_at", "") >= hour_ago]
+    if expired:
+        alerts.append(f"{len(expired)} lượt giữ ô hết hạn trong 1 giờ qua (xe không vào ô được gán)")
+    due_soon = app.db.query(t.sessions, "pii_pk = :site AND purge_due_at <= :soon",
+                            {":site": app.cfg.site_id, ":soon": iso(now + timedelta(days=1))}, index="purge_due")
+    if due_soon:
+        sessions = app.db.batch_get(t.sessions, [{"session_id": k["session_id"]} for k in due_soon])
+        still_open = [s for s in sessions if s.get("state") not in CLOSED_STATES]
+        if still_open:
+            alerts.append(f"{len(still_open)} phiên còn mở sẽ bị xóa biển số trong 24 giờ: cần đóng hoặc xử lý")
     return alerts
 
 

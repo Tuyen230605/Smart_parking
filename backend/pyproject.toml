@@ -10,6 +10,7 @@ dependencies = []
 dev = [
   "boto3>=1.35",
   "moto[dynamodb]>=5.0",
+  "paho-mqtt>=2.0",
   "pytest>=8",
 ]
 
@@ -18,4 +19,4 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "local"]
