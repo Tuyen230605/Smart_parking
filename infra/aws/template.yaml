@@ -1,0 +1,347 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Smart Parking backend: DynamoDB, Lambda IoT ingest + HTTP API, IoT Rule, Cognito và IoT policy
+  cho pi-01, gate-01, slots-01 (docs/aws-deployment.md). Certificate thiết bị tạo bằng CLI, không qua stack.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "[a-z0-9-]+"
+  SiteId:
+    Type: String
+    Default: site-01
+  WebBaseUrl:
+    Type: String
+    Default: http://localhost:5173
+    Description: URL gốc web app, dùng để tạo link QR /s/{token}. Không có dấu / ở cuối.
+  CorsOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:5173
+    Description: Các origin web được gọi API, phân cách bằng dấu phẩy.
+  SesSender:
+    Type: String
+    Description: Địa chỉ gửi đã xác minh trong SES.
+  ClaimKeysParam:
+    Type: String
+    Default: /smart-parking/dev/claim-keys
+    AllowedPattern: "^/.+"
+    Description: Tên SSM SecureString chứa khóa HMAC ký QR (tạo bằng CLI trước khi deploy).
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 10
+    CodeUri: ../../backend/src
+    Environment:
+      Variables:
+        SITE_ID: !Ref SiteId
+        SLOTS_TABLE: !Ref SlotsTable
+        SESSIONS_TABLE: !Ref SessionsTable
+        ACTIVE_PLATES_TABLE: !Ref ActivePlatesTable
+        PROCESSED_TABLE: !Ref ProcessedTable
+        DEVICES_TABLE: !Ref DevicesTable
+        PRICING_TABLE: !Ref PricingTable
+        WEB_BASE_URL: !Ref WebBaseUrl
+        SES_SENDER: !Ref SesSender
+        CLAIM_KEYS_PARAM: !Ref ClaimKeysParam
+
+Resources:
+  # ---------- DynamoDB (docs/api-contract.md §5) ----------
+  SlotsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-slots
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: slot_id, AttributeType: S}]
+      KeySchema: [{AttributeName: slot_id, KeyType: HASH}]
+
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: session_id, AttributeType: S}
+        - {AttributeName: state, AttributeType: S}
+        - {AttributeName: created_at, AttributeType: S}
+        - {AttributeName: claim_pk, AttributeType: S}
+        - {AttributeName: claim_expires_at, AttributeType: S}
+        - {AttributeName: pii_pk, AttributeType: S}
+        - {AttributeName: purge_due_at, AttributeType: S}
+      KeySchema: [{AttributeName: session_id, KeyType: HASH}]
+      GlobalSecondaryIndexes:
+        - IndexName: by_state
+          KeySchema:
+            - {AttributeName: state, KeyType: HASH}
+            - {AttributeName: created_at, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+        # Chỉ phiên còn QR có claim_pk; không chiếu biển số/email sang index này.
+        - IndexName: active_claims
+          KeySchema:
+            - {AttributeName: claim_pk, KeyType: HASH}
+            - {AttributeName: claim_expires_at, KeyType: RANGE}
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [state, session_ref, slot_id, claim_nonce, created_at]
+        # Job purge (đợt sau) quét phiên còn dữ liệu định danh theo hạn.
+        - IndexName: purge_due
+          KeySchema:
+            - {AttributeName: pii_pk, KeyType: HASH}
+            - {AttributeName: purge_due_at, KeyType: RANGE}
+          Projection: {ProjectionType: KEYS_ONLY}
+
+  ActivePlatesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-active-plates
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: plate_normalized, AttributeType: S}]
+      KeySchema: [{AttributeName: plate_normalized, KeyType: HASH}]
+
+  ProcessedTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-processed
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: message_id, AttributeType: S}]
+      KeySchema: [{AttributeName: message_id, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
+
+  DevicesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-devices
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: device_id, AttributeType: S}]
+      KeySchema: [{AttributeName: device_id, KeyType: HASH}]
+
+  PricingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-pricing
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pricing_id, AttributeType: S}]
+      KeySchema: [{AttributeName: pricing_id, KeyType: HASH}]
+
+  # ---------- Lambda nhận message thiết bị ----------
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-parking-${Stage}-ingest
+      Handler: parking.ingest.handler
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ProcessedTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
+        - DynamoDBReadPolicy: {TableName: !Ref PricingTable}
+        - Statement:
+            - Effect: Allow
+              Action: iot:Publish
+              Resource:
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/gates/gate-01/commands
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/displays/gate-01/commands
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+      Events:
+        DeviceMessages:
+          Type: IoTRule
+          Properties:
+            AwsIotSqlVersion: "2016-03-23"
+            # Mọi topic thiết bị của site, trừ lệnh do chính backend phát.
+            Sql: !Sub "SELECT *, topic() AS mqtt_topic FROM 'parking/v1/${SiteId}/+/+/+' WHERE topic(6) <> 'commands'"
+
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${IngestFunction}
+      RetentionInDays: 7
+
+  # ---------- HTTP API ----------
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-parking-${Stage}-api
+      Handler: parking.api.handler
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
+        - DynamoDBReadPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBReadPolicy: {TableName: !Ref DevicesTable}
+        - DynamoDBReadPolicy: {TableName: !Ref PricingTable}
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ClaimKeysParam}
+            # Trong SES sandbox, quyền được kiểm cả identity người nhận đã xác minh.
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+      Events:
+        Layout:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /public/layout, Auth: {Authorizer: NONE}}
+        Claim:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: "/public/claims/{token}", Auth: {Authorizer: NONE}}
+        ClaimEmail:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/public/claims/{token}/email", Auth: {Authorizer: NONE}}
+        ActiveClaims:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /kiosk/active-claims}
+        Dashboard:
+          Type: HttpApi
+          Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /admin/dashboard}
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 7
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: v1
+      CorsConfiguration:
+        AllowOrigins: !Ref CorsOrigins
+        AllowMethods: [GET, POST, PUT, OPTIONS]
+        AllowHeaders: [Authorization, Content-Type, Idempotency-Key]
+        MaxAge: 600
+      Auth:
+        DefaultAuthorizer: CognitoJwt
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience: [!Ref UserPoolClient]
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+      RouteSettings:
+        "POST /public/claims/{token}/email":
+          ThrottlingBurstLimit: 5
+          ThrottlingRateLimit: 1
+
+  # ---------- Cognito: tài khoản ADMIN/KIOSK do quản trị tạo ----------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub smart-parking-${Stage}
+      AdminCreateUserConfig: {AllowAdminCreateUserOnly: true}
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireUppercase: false
+          RequireSymbols: false
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub smart-parking-${Stage}-web
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {GroupName: ADMIN, UserPoolId: !Ref UserPool}
+
+  KioskGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {GroupName: KIOSK, UserPoolId: !Ref UserPool}
+
+  # ---------- IoT: mỗi thiết bị chỉ publish/subscribe topic của nó (docs/mqtt-contract.md §1) ----------
+  PiThing:
+    Type: AWS::IoT::Thing
+    Properties: {ThingName: pi-01}
+
+  GateThing:
+    Type: AWS::IoT::Thing
+    Properties: {ThingName: gate-01}
+
+  SlotsThing:
+    Type: AWS::IoT::Thing
+    Properties: {ThingName: slots-01}
+
+  PiPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub smart-parking-${Stage}-pi-01
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:client/pi-01
+          - Effect: Allow
+            Action: iot:Publish
+            Resource:
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/vision/pi-01/events
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/devices/pi-01/status
+
+  SlotsPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub smart-parking-${Stage}-slots-01
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:client/slots-01
+          - Effect: Allow
+            Action: iot:Publish
+            Resource:
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/slots/slots-01/state
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/devices/slots-01/status
+
+  GatePolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub smart-parking-${Stage}-gate-01
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:client/gate-01
+          - Effect: Allow
+            Action: iot:Publish
+            Resource:
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/gates/gate-01/telemetry
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/displays/gate-01/telemetry
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/devices/gate-01/status
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource:
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/parking/v1/${SiteId}/gates/gate-01/commands
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/parking/v1/${SiteId}/displays/gate-01/commands
+          - Effect: Allow
+            Action: iot:Receive
+            Resource:
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/gates/gate-01/commands
+              - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/${SiteId}/displays/gate-01/commands
+
+Outputs:
+  ApiUrl:
+    Description: Điền vào VITE_API_BASE_URL của web.
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/v1
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  IotPolicies:
+    Description: Gắn vào certificate từng thiết bị.
+    Value: !Sub ${PiPolicy}, ${GatePolicy}, ${SlotsPolicy}
