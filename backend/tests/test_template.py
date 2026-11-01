@@ -1,4 +1,4 @@
-"""Kiểm quyền IAM trong infra/aws/template.yaml so với thao tác code thực hiện. Moto không kiểm IAM, nên thiếu
+"""Kiểm infra/aws/template.yaml: quyền IAM so với thao tác code thực hiện, và cấu hình CORS. Moto không kiểm IAM, nên thiếu
 quyền chỉ lộ ra khi chạy trên AWS (Codex #2: ApiFunction thiếu ConditionCheckItem trên Devices)."""
 from pathlib import Path
 
@@ -54,9 +54,13 @@ def _intrinsic(loader, suffix, node):
 CfnLoader.add_multi_constructor("!", _intrinsic)
 
 
-def _policies(function: str) -> list:
+def _properties(resource: str) -> dict:
     template = yaml.load(TEMPLATE.read_text(encoding="utf-8"), Loader=CfnLoader)
-    return template["Resources"][function]["Properties"]["Policies"]
+    return template["Resources"][resource]["Properties"]
+
+
+def _policies(function: str) -> list:
+    return _properties(function)["Policies"]
 
 
 def _granted(function: str) -> tuple[dict[str, set[str]], set[str]]:
@@ -91,3 +95,17 @@ def test_publishers_can_resolve_account_iot_endpoint():
     for function in ("IngestFunction", "ApiFunction"):
         _, other = _granted(function)
         assert {"iot:Publish", "iot:DescribeEndpoint"} <= other, function
+
+
+def test_http_api_cors_survives_sam_transform():
+    """AllowOrigins viết bằng hàm thì SAM coi hàm đó là toàn bộ cấu hình CORS và bỏ các khóa khác: API deploy ra
+    không trả header CORS, web trên CloudFront báo không kết nối được máy chủ."""
+    cors = _properties("HttpApi")["CorsConfiguration"]
+    if set(cors) == {"If"}:
+        configs = cors["If"][1:]
+    else:
+        configs = [cors]
+        assert isinstance(cors["AllowOrigins"], list), "bọc cả CorsConfiguration trong hàm, không chỉ AllowOrigins"
+    for config in configs:
+        assert {"AllowOrigins", "AllowMethods", "AllowHeaders"} <= set(config)
+        assert "Authorization" in config["AllowHeaders"] and "Idempotency-Key" in config["AllowHeaders"]

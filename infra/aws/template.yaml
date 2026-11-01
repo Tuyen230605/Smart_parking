@@ -275,16 +275,18 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: v1
-      CorsConfiguration:
-        AllowOrigins: !Split
-          - ","
-          - !Join
-            - ","
-            - - !If [UseCloudFrontUrl, !Sub "https://${WebDistribution.DomainName}", !Ref WebBaseUrl]
-              - !Ref CorsOrigins
-        AllowMethods: [GET, POST, PUT, OPTIONS]
-        AllowHeaders: [Authorization, Content-Type, Idempotency-Key]
-        MaxAge: 600
+      # AllowOrigins viết bằng hàm thì SAM coi hàm đó là toàn bộ cấu hình CORS (bỏ AllowMethods/AllowHeaders)
+      # và API không còn CORS. Vì vậy hàm bọc cả cấu hình, mỗi nhánh là một cấu hình đầy đủ.
+      CorsConfiguration: !If
+        - UseCloudFrontUrl
+        - AllowOrigins: !Split [",", !Sub "https://${WebDistribution.DomainName},${CorsOrigins}"]
+          AllowMethods: [GET, POST, PUT, OPTIONS]
+          AllowHeaders: [Authorization, Content-Type, Idempotency-Key]
+          MaxAge: 600
+        - AllowOrigins: !Split [",", !Sub "${WebBaseUrl},${CorsOrigins}"]
+          AllowMethods: [GET, POST, PUT, OPTIONS]
+          AllowHeaders: [Authorization, Content-Type, Idempotency-Key]
+          MaxAge: 600
       Auth:
         DefaultAuthorizer: CognitoJwt
         Authorizers:
