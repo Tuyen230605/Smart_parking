@@ -1,0 +1,5 @@
+{"name": "slots-tof-fault", "steps": [
+  {"at": 0,  "do": "tof_fault", "value": true},
+  {"at": 10, "do": "snapshot"},
+  {"at": 15, "do": "tof_fault", "value": false}
+]}

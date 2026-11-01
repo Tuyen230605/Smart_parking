@@ -1,0 +1,4 @@
+{"name": "slots-reboot", "steps": [
+  {"at": 0, "do": "slot", "slot": "F1-C1", "occupied": true},
+  {"at": 3, "do": "reboot"}
+]}

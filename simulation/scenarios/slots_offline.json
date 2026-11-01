@@ -1,0 +1,5 @@
+{"name": "slots-offline", "steps": [
+  {"at": 0,   "do": "slot", "slot": "F1-B2", "occupied": true},
+  {"at": 3,   "do": "mute", "value": true},
+  {"at": 100, "do": "mute", "value": false}
+]}

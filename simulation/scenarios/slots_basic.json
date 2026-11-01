@@ -1,0 +1,6 @@
+{"name": "slots-basic", "steps": [
+  {"at": 0, "do": "slot", "slot": "F1-A2", "occupied": true},
+  {"at": 3, "do": "slot", "slot": "F2-C3", "occupied": true},
+  {"at": 6, "do": "slot", "slot": "F1-A2", "occupied": false},
+  {"at": 8, "do": "snapshot"}
+]}
