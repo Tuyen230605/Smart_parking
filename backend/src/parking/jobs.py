@@ -4,15 +4,17 @@
   vẫn trống, bỏ khóa biển số và QR (UC-05, SIM-13). Ô đã có xe mà phiên chưa PARKED thì chuyển PARKED.
 - `purge_identity` (mỗi giờ): xóa biển số/email của phiên tới `purge_due_at` (9 ngày 23 giờ), kể cả phiên
   còn mở; dashboard cảnh báo trước 24 giờ để quản trị đóng phiên (UC-10, SIM-16).
+- `check_devices` (mỗi phút): đếm thiết bị mất kết nối theo cùng quy tắc dashboard, chỉ đọc. Metric filter trong
+  template đọc trường `offline` của log `job_done` để alarm báo thiết bị offline.
 
-Cả hai idempotent: chạy lại hay chạy chồng không đổi kết quả. Lỗi hạ tầng ném ra để alarm báo.
+Cả ba idempotent: chạy lại hay chạy chồng không đổi kết quả. Lỗi hạ tầng ném ra để alarm báo.
 """
 from datetime import datetime
 
 from .app import App, get_app
 from .flows import mark_parked
 from .log import log
-from .state import cutoff
+from .state import cutoff, load_devices, offline_devices
 from .store import TransactionCancelled, op_delete, op_update, set_clause
 from .timeutil import iso
 
@@ -119,6 +121,11 @@ def _purge(app: App, session_id: str, now: datetime) -> str | None:
     return "OPEN" if session.get("state") not in CLOSED_STATES else "DONE"
 
 
+def check_devices(app: App) -> dict:
+    offline = offline_devices(load_devices(app), app.clock(), app.cfg.device_timeout_s)
+    return {"offline": len(offline), "offline_devices": offline}
+
+
 def _release_plate_ops(app: App, session: dict) -> list[dict]:
     """Bỏ khóa biển số chỉ khi khóa đó thuộc đúng phiên này."""
     plate = session.get("plate_normalized")
@@ -133,4 +140,5 @@ CLOSED_STATES = ("CLOSED", "EXPIRED", "RESOLVED", "DISMISSED")
 JOBS = {
     "expire_reservations": expire_reservations,
     "purge_identity": purge_identity,
+    "check_devices": check_devices,
 }

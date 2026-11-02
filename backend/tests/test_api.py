@@ -73,14 +73,19 @@ def test_email_rejects_bad_input(app):
     assert not app.mailer.sent
 
 
-def test_ses_failure_keeps_session(app):
-    """SIM-14: SES lỗi → khách vẫn nhận 202 và lộ trình, quản trị thấy FAILED."""
+def test_ses_failure_keeps_session(app, capsys):
+    """SIM-14: SES lỗi → khách vẫn nhận 202 và lộ trình, quản trị thấy FAILED. Log email_failed là nguồn của
+    metric filter EmailFailedMetric (template), và không được chứa email."""
     token = entered(app)
     app.mailer.fail = True
     body = {"email": "visitor@example.com", "consent_for_this_session": True}
+    capsys.readouterr()
     assert call(app, "POST", f"/public/claims/{token}/email", body, KEY_HEADER)[0] == 202
     session = session_of(app, slot_of(app, "F1-A1")["reserved_session_id"])
     assert (session["state"], session["email_status"]) == ("RESERVED", "FAILED")
+    out = capsys.readouterr().out
+    assert [json.loads(line)["event"] for line in out.splitlines()].count("email_failed") == 1
+    assert "visitor@example.com" not in out
 
 
 def test_expired_or_forged_token(app):

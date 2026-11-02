@@ -12,7 +12,7 @@ ra màn hình. Chỉ dùng khi phát triển.
 Endpoint riêng cho phát triển:
     POST /dev/mqtt           body là message MQTT v1 kèm "mqtt_topic", xử lý như IoT Rule
     POST /dev/slots/F1-A2    body {"occupied": true}, giả slot_changed từ slots-01
-    POST /dev/jobs/expire_reservations | /dev/jobs/purge_identity   chạy job ngay
+    POST /dev/jobs/<expire_reservations|purge_identity|check_devices>   chạy job ngay
 """
 import argparse
 import itertools

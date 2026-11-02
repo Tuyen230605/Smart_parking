@@ -2,11 +2,11 @@
 
 Thiết kế ở [docs/aws-deployment.md](../../docs/aws-deployment.md). [`template.yaml`](template.yaml) (AWS SAM) tạo:
 
-- 6 bảng DynamoDB; Lambda `ingest` (IoT Rule), `api` (HTTP API stage `v1`), `jobs` (EventBridge Scheduler: hết hạn giữ ô mỗi phút, xóa dữ liệu định danh mỗi giờ); log giữ 7 ngày;
+- 6 bảng DynamoDB; Lambda `ingest` (IoT Rule), `api` (HTTP API stage `v1`), `jobs` (EventBridge Scheduler: hết hạn giữ ô và đếm thiết bị offline mỗi phút, xóa dữ liệu định danh mỗi giờ); log giữ 7 ngày;
 - Cognito user pool với nhóm `ADMIN`, `KIOSK`; JWT authorizer cho `/kiosk/*`, `/admin/*`; app client cho phép `USER_PASSWORD_AUTH` vì web gọi thẳng API Cognito (`web/src/auth.ts`);
 - Thing và IoT policy cho `pi-01`, `gate-01`, `slots-01`, mỗi policy chỉ được topic của thiết bị đó;
 - web: S3 riêng tư + CloudFront (OAC, HTTPS, function trả `index.html` cho route của app, header bảo mật để token QR không lọt qua Referer);
-- alarm: `jobs` lỗi (purge có thể trễ hạn), `ingest` lỗi (gồm không phát được lệnh cổng), API trả 5xx; gửi email qua SNS nếu đặt `AlarmEmail`.
+- alarm: `jobs` lỗi (purge có thể trễ hạn), `ingest` lỗi (gồm không phát được lệnh cổng), API trả 5xx, thiết bị offline quá 2 phút (báo cả lúc kết nối lại), SES từ chối gửi email chỉ dẫn; hai alarm sau đọc metric `SmartParking/<Stage>` lấy từ log JSON bằng metric filter. Gửi email qua SNS nếu đặt `AlarmEmail`.
 
 Link QR và CORS tự dùng domain CloudFront của stack; đặt `WebBaseUrl` chỉ khi web chạy ở nơi khác. Chưa có trong template: AWS Budgets (đặt trên console). Certificate thiết bị tạo bằng script để private key không đi qua CloudFormation.
 
@@ -60,5 +60,8 @@ Cần AWS CLI và SAM CLI (`uv tool install aws-sam-cli`). Đăng nhập: `aws l
    ```
    File ở `secrets/devices/<thiết bị>/` (git bỏ qua) kèm `AmazonRootCA1.pem` và `endpoint.txt`. Gửi riêng cho từng người, không qua git. Thiết bị phải dùng client ID đúng tên Thing; mock và thiết bị thật cùng tên không chạy song song được.
 8. **Thử nhanh:** AWS IoT → MQTT test client, subscribe `parking/v1/site-01/#`, publish một `slots_snapshot` đủ 18 ô lên `parking/v1/site-01/slots/slots-01/state` rồi một `vehicle_detected`. Phải thấy `gate_command` và `display_command`; log ở CloudWatch `/aws/lambda/smart-parking-dev-ingest`.
+9. **Thử alarm** (CloudWatch → Alarms, lọc `smart-parking-dev`; metric mới chỉ xuất hiện sau lần job/API đầu tiên ghi log):
+   - `devices-offline`: tắt mock/thiết bị khoảng 4 phút (90 giây timeout + 2 phút alarm) → thư ALARM; bật lại → thư OK. Khi không chạy thiết bị nào, alarm nằm ở ALARM (chỉ gửi một thư lúc chuyển trạng thái).
+   - `email-failed`: SES còn sandbox nên nhập ở trang khách một email **chưa xác minh** → khách vẫn thấy lộ trình, trong vòng 5 phút có thư ALARM; log `email_failed` ở `/aws/lambda/smart-parking-dev-api` cho biết lỗi.
 
 Gỡ toàn bộ sau demo: xóa hết object trong bucket web (`aws s3 rm s3://<WebBucketName> --recursive`), rồi `sam delete --stack-name smart-parking-dev`, xóa certificate và SSM parameter.

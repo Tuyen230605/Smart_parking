@@ -5,7 +5,7 @@
 """
 from datetime import datetime, timedelta
 
-from .contract import SLOTS
+from .contract import DEVICES, SLOTS
 from .layout import SLOT_IDS
 from .pricing import DEFAULT_PRICING
 from .timeutil import iso
@@ -30,6 +30,10 @@ def device_online(item: dict | None, now: datetime, timeout_s: int) -> bool:
     return bool(at) and at >= cutoff(now, timeout_s)
 
 
+def offline_devices(devices: dict[str, dict], now: datetime, timeout_s: int) -> list[str]:
+    return [d for d in DEVICES if not device_online(devices.get(d), now, timeout_s)]
+
+
 def slot_status(item: dict | None, fresh: bool) -> str:
     if item and item.get("out_of_service"):
         return "OUT_OF_SERVICE"
@@ -47,6 +51,11 @@ def load_slots(app) -> tuple[dict[str, dict], dict | None]:
     t = app.cfg.tables
     slots = {s["slot_id"]: s for s in app.db.batch_get(t.slots, [{"slot_id": sid} for sid in SLOT_IDS])}
     return slots, app.db.get(t.devices, {"device_id": SLOTS})
+
+
+def load_devices(app) -> dict[str, dict]:
+    items = app.db.batch_get(app.cfg.tables.devices, [{"device_id": d} for d in DEVICES])
+    return {d["device_id"]: d for d in items}
 
 
 def load_pricing(app) -> dict:

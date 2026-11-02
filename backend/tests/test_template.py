@@ -1,8 +1,11 @@
 """Kiểm infra/aws/template.yaml: quyền IAM so với thao tác code thực hiện, và cấu hình CORS. Moto không kiểm IAM, nên thiếu
 quyền chỉ lộ ra khi chạy trên AWS (Codex #2: ApiFunction thiếu ConditionCheckItem trên Devices)."""
+import json
 from pathlib import Path
 
 import yaml
+
+from parking import jobs
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "infra" / "aws" / "template.yaml"
 
@@ -35,6 +38,7 @@ REQUIRED = {
         "SessionsTable": {"GetItem", "BatchGetItem", "UpdateItem", "Query"},
         "SlotsTable": {"GetItem", "UpdateItem"},
         "ActivePlatesTable": {"GetItem", "DeleteItem"},
+        "DevicesTable": {"BatchGetItem"},
     },
 }
 
@@ -109,3 +113,20 @@ def test_http_api_cors_survives_sam_transform():
     for config in configs:
         assert {"AllowOrigins", "AllowMethods", "AllowHeaders"} <= set(config)
         assert "Authorization" in config["AllowHeaders"] and "Idempotency-Key" in config["AllowHeaders"]
+
+
+def test_every_job_is_scheduled():
+    events = _properties("JobsFunction")["Events"].values()
+    assert {json.loads(e["Properties"]["Input"])["job"] for e in events} == set(jobs.JOBS)
+
+
+def test_alarm_metric_filters_read_logged_fields():
+    """Filter khớp log mà test_jobs/test_api kiểm; lệch tên thì alarm im lặng mãi mà cfn-lint không bắt được."""
+    offline = _properties("OfflineDevicesMetric")
+    assert offline["FilterPattern"] == '{ ($.event = "job_done") && ($.job = "check_devices") }'
+    assert offline["MetricTransformations"][0]["MetricValue"] == "$.offline"
+    assert _properties("EmailFailedMetric")["FilterPattern"] == '{ $.event = "email_failed" }'
+    for alarm, metric in (("DevicesOfflineAlarm", "OfflineDevicesMetric"), ("EmailFailedAlarm", "EmailFailedMetric")):
+        transform = _properties(metric)["MetricTransformations"][0]
+        props = _properties(alarm)
+        assert (props["Namespace"], props["MetricName"]) == (transform["MetricNamespace"], transform["MetricName"])

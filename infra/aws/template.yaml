@@ -314,6 +314,7 @@ Resources:
         - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
         - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
         - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+        - DynamoDBReadPolicy: {TableName: !Ref DevicesTable}
       Events:
         ExpireReservations:
           Type: ScheduleV2
@@ -327,6 +328,12 @@ Resources:
             ScheduleExpression: rate(1 hour)
             Input: '{"job": "purge_identity"}'
             RetryPolicy: {MaximumRetryAttempts: 2}
+        CheckDevices:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 minute)
+            Input: '{"job": "check_devices"}'
+            RetryPolicy: {MaximumRetryAttempts: 0}
 
   JobsLogGroup:
     Type: AWS::Logs::LogGroup
@@ -385,6 +392,65 @@ Resources:
       Dimensions:
         - {Name: ApiId, Value: !Ref HttpApi}
         - {Name: Stage, Value: v1}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  # Metric từ log JSON của Lambda (parking/log.py): đổi tên sự kiện/trường trong code thì sửa cả filter ở đây.
+  # Job check_devices ghi số thiết bị quá 90 giây không gửi tin vào log job_done mỗi phút.
+  OfflineDevicesMetric:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref JobsLogGroup
+      FilterPattern: '{ ($.event = "job_done") && ($.job = "check_devices") }'
+      MetricTransformations:
+        - MetricNamespace: !Sub SmartParking/${Stage}
+          MetricName: OfflineDevices
+          MetricValue: $.offline
+          Unit: Count
+
+  # Hai phút liền có thiết bị offline; báo cả lúc kết nối lại. Dashboard /admin cho biết thiết bị nào.
+  # Không có số liệu nghĩa là job không chạy: alarm giữ nguyên trạng thái, jobs-errors báo việc đó.
+  DevicesOfflineAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-parking-${Stage}-devices-offline
+      AlarmDescription: Có thiết bị (pi-01, gate-01, slots-01) mất kết nối quá 90 giây. Xem /admin để biết thiết bị nào.
+      Namespace: !Sub SmartParking/${Stage}
+      MetricName: OfflineDevices
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+      OKActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  # SES lỗi không thành 5xx (khách vẫn nhận 202, phiên ghi email_status FAILED) nên đếm log email_failed của API.
+  EmailFailedMetric:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApiLogGroup
+      FilterPattern: '{ $.event = "email_failed" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub SmartParking/${Stage}
+          MetricName: EmailFailed
+          MetricValue: "1"
+          Unit: Count
+
+  # Gồm người nhận chưa xác minh khi SES còn sandbox, vượt hạn mức gửi, sai quyền. Không gồm thư bị bounce sau khi SES đã nhận.
+  EmailFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub smart-parking-${Stage}-email-failed
+      AlarmDescription: SES từ chối gửi email chỉ dẫn. Xem log email_failed của Lambda API để biết lỗi.
+      Namespace: !Sub SmartParking/${Stage}
+      MetricName: EmailFailed
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1

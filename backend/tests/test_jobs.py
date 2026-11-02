@@ -1,9 +1,11 @@
-"""Job theo lịch: hết hạn giữ ô (SIM-13) và xóa dữ liệu định danh sau 10 ngày (SIM-16)."""
+"""Job theo lịch: hết hạn giữ ô (SIM-13), xóa dữ liệu định danh sau 10 ngày (SIM-16) và đếm thiết bị offline."""
+import json
+
 import pytest
 
 from parking import ingest, jobs
 
-from conftest import session_of, slot_changed, slot_of, snapshot, vehicle
+from conftest import device_status, session_of, slot_changed, slot_of, snapshot, vehicle
 from test_api import call, entered
 
 
@@ -99,3 +101,20 @@ def test_dashboard_reports_recent_expiry(app):
     jobs.expire_reservations(app)
     alerts = call(app, "GET", "/admin/dashboard", groups="[ADMIN]")[1]["alerts"]
     assert "1 lượt giữ ô hết hạn trong 1 giờ qua (xe không vào ô được gán)" in alerts
+
+
+def test_check_devices_logs_offline_count_for_alarm(app, monkeypatch, capsys):
+    """Metric filter OfflineDevicesMetric (template) đọc `offline` từ log job_done; đếm như dashboard."""
+    monkeypatch.setattr(jobs, "get_app", lambda: app)
+    assert jobs.check_devices(app) == {"offline": 3, "offline_devices": ["pi-01", "gate-01", "slots-01"]}
+    ingest.process(app, device_status(app, "pi-01"))
+    ingest.process(app, snapshot(app))
+    capsys.readouterr()
+    assert jobs.handler({"job": "check_devices"}, None) == {"offline": 1, "offline_devices": ["gate-01"]}
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert (line["event"], line["job"], line["offline"]) == ("job_done", "check_devices", 1)
+
+    ingest.process(app, device_status(app, "pi-01", state="OFFLINE"))  # Last Will
+    assert jobs.check_devices(app)["offline_devices"] == ["pi-01", "gate-01"]
+    app.clock.advance(seconds=91)
+    assert jobs.check_devices(app)["offline"] == 3

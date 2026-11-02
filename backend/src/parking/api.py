@@ -11,14 +11,14 @@ from datetime import timedelta
 from . import admin
 from .app import App, get_app
 from .claims import InvalidToken, verify_claim
-from .contract import DEVICES, GATE, SLOTS
+from .contract import GATE, SLOTS
 from .flows import claim_summary
 from .ids import new_uuid
 from .jobs import CLOSED_STATES
 from .layout import SLOT_IDS, route_steps, source_of
 from .log import log
 from .rest import ApiError, Request, authorize, idempotency_key, json_body, parse_event, response
-from .state import CLAIM_STATES, board_fresh, cutoff, device_online, slot_status
+from .state import CLAIM_STATES, board_fresh, cutoff, load_devices, offline_devices, slot_status
 from .store import ConditionFailed, set_clause
 from .timeutil import epoch, iso, parse_iso
 
@@ -181,10 +181,10 @@ def get_dashboard(app: App, req: Request):
     now = app.clock()
     cfg, t = app.cfg, app.cfg.tables
     slots = {s["slot_id"]: s for s in app.db.batch_get(t.slots, [{"slot_id": sid} for sid in SLOT_IDS])}
-    devices = {d["device_id"]: d for d in app.db.batch_get(t.devices, [{"device_id": d} for d in DEVICES])}
+    devices = load_devices(app)
     fresh = board_fresh(devices.get(SLOTS), now, cfg.device_timeout_s)
     counts = Counter(slot_status(slots.get(sid), fresh) for sid in SLOT_IDS)
-    offline = [d for d in DEVICES if not device_online(devices.get(d), now, cfg.device_timeout_s)]
+    offline = offline_devices(devices, now, cfg.device_timeout_s)
     return 200, {
         "available": counts["AVAILABLE"],
         "reserved": counts["RESERVED"],
