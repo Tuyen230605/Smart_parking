@@ -1,5 +1,6 @@
 import { NavLink, Outlet, createBrowserRouter } from "react-router-dom";
 import { usingMock } from "./api";
+import { RequireAuth } from "./components/RequireAuth";
 import { AdminPage } from "./pages/admin/AdminPage";
 import { ClaimPage } from "./pages/guest/ClaimPage";
 import { KioskPage } from "./pages/kiosk/KioskPage";
@@ -28,7 +29,8 @@ export const router = createBrowserRouter([
     element: <Shell />,
     children: [
       { path: "/", element: <LayoutPage /> },      // người 3
-      { path: "/kiosk", element: <KioskPage /> },  // người 2
+      // người 2; GET /kiosk/active-claims cần JWT nhóm KIOSK hoặc ADMIN
+      { path: "/kiosk", element: <RequireAuth groups={["KIOSK", "ADMIN"]}><KioskPage /></RequireAuth> },
       { path: "/admin/*", element: <AdminPage /> }, // người 4
     ],
   },
