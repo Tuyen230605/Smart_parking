@@ -1,5 +1,19 @@
 # Mô phỏng
 
-Mock Pi, ESP gate và ESP slots phải dùng đúng [MQTT v1](../docs/mqtt-contract.md). Mock slots có đủ 18 ô; F1-A1 giả lập tín hiệu cảm biến khi chạy không có sa bàn, 17 ô khác giả lập nút. Mock gate trả ACK cho hai cần/OLED, cho phép tạo lỗi/timeout/replay.
+Mock dùng **đúng cert, client id, topic và JSON** của thiết bị thật ([MQTT v1](../docs/mqtt-contract.md)), nối thẳng AWS IoT Core bằng file do `infra/aws/provision-devices.sh` sinh. Thêm `--local` để dùng Mosquitto `localhost:1883`.
 
-Xem [16 kịch bản nghiệm thu](../docs/simulation-and-test-plan.md). Hiện thư mục là khung tài liệu; script mô phỏng sẽ được nhóm phát triển ở các mốc trong [kế hoạch](../PROJECT_PLAN.md).
+| Script | Thay cho | Dùng |
+|---|---|---|
+| `mock_gate.py` | ESP32 `gate-01` | Nhận lệnh cần/OLED, kiểm hạn/trùng/đích, ACK `OPENING→OPEN→CLOSING→CLOSED`. `--hold 5`, `--fail-motor`, `--no-ack` |
+| `mock_slots.py` | ESP32 `slots-01` | Gõ `F1-A1` hoặc `0–17` để đảo ô; `s` snapshot; `full`/`clear`; `off 100` ngắt mạng 100 s. Lưu trạng thái như NVS |
+| `e2e_smoke.py` | — | Một lượt vào → đỗ → ra → đóng phiên trên AWS thật, qua API admin |
+| `../edge/raspberry-pi-vision/mock_pi.py` | Pi `pi-01` | Sự kiện camera theo kịch bản |
+
+```bash
+pip install -r simulation/requirements.txt
+python simulation/mock_gate.py      # terminal 1
+python simulation/mock_slots.py     # terminal 2
+python simulation/e2e_smoke.py      # terminal 3 (tắt pi-vision trước: cùng client id pi-01)
+```
+
+AWS IoT chỉ giữ một kết nối mỗi client id: khi đã nạp ESP32 thật, tắt mock tương ứng. 16 kịch bản nghiệm thu: [simulation-and-test-plan.md](../docs/simulation-and-test-plan.md).

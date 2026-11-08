@@ -90,13 +90,16 @@ curl -o AmazonRootCA1.pem https://www.amazontrust.com/repository/AmazonRootCA1.p
 
 Chép cert vào `/etc/parking/certs/` (ngoài repo, `chmod 600` file key), rồi sửa `[mqtt]`: `host` = endpoint ATS, `port = 8883`, `tls = true`. Kiểm tra bằng MQTT test client trên AWS Console, subscribe `parking/v1/site-01/#`.
 
-## Chạy tự động khi khởi động
+## Chạy tự động khi khởi động (cùng Pi với Smart Lighting)
 
 ```bash
-sudo cp pi-vision.service /etc/systemd/system/   # sửa User và đường dẫn trước
-sudo systemctl enable --now pi-vision
+./install-pi.sh            # apt + venv ~/venv-parking + unit pi-vision theo user hiện tại
+./pi-mode.sh parking       # dừng container vision của Lighting (giữ camera), bật pi-vision
+./pi-mode.sh lighting      # trả camera cho Lighting
 journalctl -u pi-vision -f
 ```
+
+`config.local.toml` (do `infra/aws/provision-devices.sh` sinh, `infra/aws/copy-pi-certs.sh` chép sang) ghi đè `[mqtt]` của `config.toml` để nối AWS IoT. Mạng chặn 8883 thì đặt `port = 443` (dùng ALPN). Xem [setup-guide](../../docs/setup-guide.md#7-pi-5-nhường-camera-và-nối-aws).
 
 ## Thử trên laptop không cần Pi
 

@@ -7,7 +7,6 @@ import argparse
 import logging
 import signal
 import time
-import tomllib
 
 import cv2
 
@@ -15,6 +14,7 @@ from camera import open_camera
 from detector import CardDetector, LaneTracker, PlateReader, crop, roi_to_pixels
 from preview import PreviewServer
 from publisher import Publisher
+from settings import load_config
 
 log = logging.getLogger("pi-vision")
 BOX_COLORS = {"GREEN": (0, 200, 0), "RED": (0, 0, 230), None: (200, 200, 200)}
@@ -52,8 +52,7 @@ def annotate(frame, lanes, states, last_event):
 def main():
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    with open(args.config, "rb") as f:
-        cfg = tomllib.load(f)
+    cfg = load_config(args.config)
     if args.source:
         cfg["camera"]["source"] = args.source
 

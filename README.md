@@ -2,12 +2,13 @@
 
 Mô hình bãi **2 tầng, 18 ô** kết hợp Raspberry Pi 5/camera, hai ESP32, AWS và một web app. Pi nhận diện thẻ xanh/đỏ và biển số; ESP32 cổng điều khiển **hai cần chắn + OLED**; ESP32 ô đọc **một cảm biến thật + 17 nút giả lập**. Backend gán ô, hiển thị QR riêng cho từng lượt, gửi email hướng dẫn nếu khách nhập email, và tính phí mô phỏng lúc ra.
 
-> Repository hiện là **thiết kế và khung module**, chưa phải phần mềm/firmware chạy hoàn chỉnh.
+> **Dựng lên AWS: [docs/setup-guide.md](docs/setup-guide.md)** — backend, hạ tầng (CloudFormation), web, Pi, mock 2 ESP32 và firmware ESP32 đều đã có code chạy được.
 
 ## Đọc theo thứ tự
 
 | Tài liệu | Nội dung |
 |---|---|
+| [docs/setup-guide.md](docs/setup-guide.md) | **Cài đặt từng bước**: AWS, web, Pi, mock ESP32, nạp firmware |
 | [PROJECT_PLAN.md](PROJECT_PLAN.md) | Mục tiêu, phạm vi, mốc và phân công 4 người |
 | [docs/architecture.md](docs/architecture.md) | Kiến trúc đầu cuối, phần mềm trên AWS, dữ liệu và quyết định thiết kế |
 | [docs/parking-layout.md](docs/parking-layout.md) | Sơ đồ hai làn, hai tầng, 18 ô và đường đi |
@@ -35,10 +36,11 @@ docs/                       tài liệu hệ thống và hợp đồng
 edge/raspberry-pi-vision/   camera, thẻ màu, OCR
 firmware/esp32-gates/       2 cần chắn, OLED
 firmware/esp32-slot-sensors/ 1 cảm biến, 17 nút
-backend/                    phiên đỗ, ô, QR, giá, email
+backend/src/                Lambda Python: IoT handler, API, job giám sát/purge
+backend/tests/              kiểm thử nghiệp vụ với DynamoDB giả (moto)
 web/                        một app cho guest/kiosk/admin
-simulation/                 mock device và kịch bản
-infra/aws/                  cấu hình AWS theo tài liệu triển khai
+simulation/                 mock gate-01/slots-01 + kiểm thử đầu cuối trên AWS
+infra/aws/                  template CloudFormation + script deploy/cấp cert/xóa
 ```
 
 ## Nguyên tắc triển khai

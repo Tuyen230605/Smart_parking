@@ -8,9 +8,9 @@ import argparse
 import copy
 import json
 import time
-import tomllib
 
 from publisher import Publisher
+from settings import load_config
 
 SCENARIOS = {
     "entry-ok": ("ENTRY", "GREEN", "51A-12345", 0.93),
@@ -27,8 +27,7 @@ def main():
     p.add_argument("--config", default="config.toml")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
-    with open(args.config, "rb") as f:
-        cfg = tomllib.load(f)
+    cfg = load_config(args.config)
 
     pub = Publisher(cfg["device"], cfg["mqtt"], dry_run=args.dry_run)
     time.sleep(0 if args.dry_run else 1)  # chờ kết nối

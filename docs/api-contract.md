@@ -59,6 +59,10 @@ Trả `202 Accepted` và `email_status=QUEUED`. Backend dùng conditional update
 | `POST /admin/sessions/{id}/confirm-passage` | ADMIN | Xác nhận xe đã qua, chốt giờ/phí và đóng phiên |
 | `GET /admin/devices` | ADMIN | Trạng thái Pi, ESP gate, ESP slots và thời điểm cuối |
 | `GET /admin/pricing`, `PUT /admin/pricing` | ADMIN | Xem/sửa bảng giá demo |
+| `POST /admin/gates/{ENTRY\|EXIT}/command` | ADMIN | Mở/đóng tay một cần (`{"action":"OPEN"}`) để thử cơ cấu; ghi cảnh báo `MANUAL_GATE` |
+| `POST /admin/alerts/{id}/ack` | ADMIN | Đánh dấu đã xem một cảnh báo |
+
+`GET /admin/dashboard` trả `alerts` là danh sách `{alert_id, kind, level, message, created_at, session_id?}` chưa xem. `resolve-plate` nhận `{"action":"ENTRY|EXIT|REJECT","plate_text":"51A-12345","reason":"..."}`. Phí 0 ₫ tự mở cần ra; `payment` ghi `PAID_CASH/WAIVED` xong cũng tự mở cần ra, `open-exit` dùng để mở lại.
 
 Ví dụ gửi xác nhận thu tiền:
 

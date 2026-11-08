@@ -123,3 +123,74 @@ button:disabled { opacity: 0.6; cursor: wait; }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
 .stats b { font-size: 2rem; display: block; }
+
+/* ── đăng nhập, form chung ── */
+form input, .actions input, select, .card label input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+form label.check input { display: inline; width: auto; }
+.card label { display: block; margin-bottom: 12px; }
+label.inline { display: flex; gap: 8px; align-items: center; }
+label.inline select { width: auto; margin: 0; }
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+button.link { width: auto; padding: 0 4px; background: none; color: var(--accent); font-weight: 400; font-size: 0.85rem; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.row button, .row input { width: auto; flex: 0 1 auto; margin: 0; }
+.row input { min-width: 180px; }
+.user-badge { font-size: 0.85rem; }
+.card.warn { background: color-mix(in srgb, var(--reserved) 18%, var(--surface)); }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 0.8rem; }
+.badge { background: var(--occupied); color: #fff; border-radius: 999px; padding: 0 8px; font-size: 0.8rem; }
+
+/* ── sơ đồ công khai ── */
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; font-size: 0.9rem; }
+.legend span { display: flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-radius: 4px; }
+
+/* ── kiosk ── */
+.kiosk { max-width: 1200px; }
+.kiosk-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.kiosk-head button { width: auto; }
+.kiosk-claim { display: grid; grid-template-columns: minmax(240px, 420px) 1fr; gap: 32px; align-items: center; }
+.kiosk-claim .qr { background: #fff; padding: 12px; border-radius: 12px; }
+.kiosk-claim .qr svg { display: block; width: 100%; height: auto; }
+.kiosk-claim .slot-id { font-size: 6rem; }
+.kiosk-claim .route { font-size: 1.6rem; }
+.kiosk-idle { font-size: 1.6rem; text-align: center; padding: 64px 16px; color: var(--muted); }
+@media (max-width: 700px) { .kiosk-claim { grid-template-columns: 1fr; } .kiosk-claim .slot-id { font-size: 4rem; } }
+
+/* ── quản trị ── */
+.tabs { display: flex; gap: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.tabs a { padding: 8px 0; text-decoration: none; color: var(--muted); }
+.tabs a.active { color: var(--accent); border-bottom: 2px solid var(--accent); font-weight: 600; }
+.stat-available b { color: var(--available); }
+.stat-reserved b { color: var(--reserved); }
+.stat-occupied b { color: var(--occupied); }
+.stat-unknown b { color: var(--unknown); }
+.alerts { list-style: none; padding: 0; margin: 0; }
+.alerts li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.92rem; }
+.alerts li.alert-error b { color: var(--occupied); }
+.alerts li.alert-warn b { color: var(--reserved); }
+.devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.device { border: 1px solid var(--border); border-radius: 8px; padding: 12px; border-left: 4px solid var(--unknown); }
+.device-online { border-left-color: var(--available); }
+.device-degraded { border-left-color: var(--reserved); }
+.device-offline { border-left-color: var(--occupied); }
+.gates { margin-top: 8px; display: grid; gap: 8px; }
+.session-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+.session.state-manual_review { border-left: 4px solid var(--reserved); }
+.session.state-exit_requested { border-left: 4px solid var(--occupied); }
+.session.state-exit_opened { border-left: 4px solid var(--accent); }
+.actions { margin-top: 8px; }
+.actions input { margin-bottom: 8px; }
+.fee { font-size: 1.4rem; }
+.history { font-size: 0.85rem; color: var(--muted); }
+.narrow-card { max-width: 480px; }

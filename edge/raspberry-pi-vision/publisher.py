@@ -31,7 +31,15 @@ class Publisher:
         import paho.mqtt.client as mqtt
 
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.device_id)
-        if cfg["tls"]:
+        if cfg["tls"] and cfg["port"] == 443:
+            # Mạng chặn 8883: AWS IoT nhận MQTT qua 443 khi bật ALPN x-amzn-mqtt-ca.
+            import ssl
+
+            ctx = ssl.create_default_context(cafile=cfg["ca_cert"])
+            ctx.load_cert_chain(cfg["cert"], cfg["key"])
+            ctx.set_alpn_protocols(["x-amzn-mqtt-ca"])
+            self.client.tls_set_context(ctx)
+        elif cfg["tls"]:
             self.client.tls_set(ca_certs=cfg["ca_cert"], certfile=cfg["cert"], keyfile=cfg["key"])
         will = self._envelope("device_status") | {"state": "OFFLINE", "firmware_version": self.firmware_version}
         self.client.will_set(self.status_topic, json.dumps(will), qos=1, retain=False)

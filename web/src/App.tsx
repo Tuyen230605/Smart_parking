@@ -1,5 +1,6 @@
 import { NavLink, Outlet, createBrowserRouter } from "react-router-dom";
 import { usingMock } from "./api";
+import { UserBadge } from "./components/RequireAuth";
 import { AdminPage } from "./pages/admin/AdminPage";
 import { ClaimPage } from "./pages/guest/ClaimPage";
 import { KioskPage } from "./pages/kiosk/KioskPage";
@@ -14,6 +15,7 @@ function Shell() {
           <NavLink to="/" end>Sơ đồ</NavLink>
           <NavLink to="/kiosk">Kiosk</NavLink>
           <NavLink to="/admin">Quản trị</NavLink>
+          <UserBadge />
         </nav>
       </header>
       {usingMock && <div className="mock-banner">Đang dùng API giả — đặt VITE_API_BASE_URL để nối backend</div>}

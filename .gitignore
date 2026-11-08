@@ -26,3 +26,11 @@ build/
 .DS_Store
 Thumbs.db
 *.tsbuildinfo
+
+# Sinh bởi infra/aws/provision-devices.sh / deploy.sh — chứa endpoint, cert, khóa
+edge/raspberry-pi-vision/config.local.toml
+firmware/*/include/secrets.h
+simulation/.slots-state.json
+
+# PlatformIO
+.pio/

@@ -1,0 +1,363 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Smart Parking MVP - IoT Core rules, Lambda, HTTP API, DynamoDB, Cognito, SES, S3+CloudFront.
+
+# Deploy bằng infra/aws/deploy.sh (chỉ cần AWS CLI, không cần SAM CLI).
+# IoT Things/certificate tạo riêng bằng infra/aws/provision-devices.sh.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+  IotEndpoint:
+    Type: String
+    Description: Kết quả `aws iot describe-endpoint --endpoint-type iot:Data-ATS`
+  ClaimHmacSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Khóa ký token QR (deploy.sh tự sinh và giữ trong secrets/)
+  SenderEmail:
+    Type: String
+    Description: Email gửi chỉ dẫn (SES sẽ gửi thư xác minh tới địa chỉ này)
+  BudgetEmail:
+    Type: String
+    Default: ""
+    Description: Email nhận cảnh báo chi phí (bỏ trống để không tạo Budget)
+  BudgetUsd:
+    Type: Number
+    Default: 5
+  EnableCdn:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: false nếu tài khoản chưa được phép tạo CloudFront (khi đó chạy web local + WebBaseUrlOverride)
+  WebBaseUrlOverride:
+    Type: String
+    Default: ""
+    Description: Bỏ trống để QR trỏ về CloudFront; điền http://<ip-laptop>:5173 nếu chạy web local
+
+Conditions:
+  HasBudget: !Not [!Equals [!Ref BudgetEmail, ""]]
+  HasWebOverride: !Not [!Equals [!Ref WebBaseUrlOverride, ""]]
+  UseCdn: !Equals [!Ref EnableCdn, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 15
+    CodeUri: ../../backend/src/
+    Environment:
+      Variables:
+        SITE_ID: site-01
+        PLATE_THRESHOLD: "0.85"
+        IOT_ENDPOINT: !Ref IotEndpoint
+        CLAIM_HMAC_SECRET: !Ref ClaimHmacSecret
+        SENDER_EMAIL: !Ref SenderEmail
+        WEB_BASE_URL: !If
+          - HasWebOverride
+          - !Ref WebBaseUrlOverride
+          - !If [UseCdn, !Sub "https://${WebDistribution.DomainName}", "http://localhost:5173"]
+        SLOTS_TABLE: !Ref SlotsTable
+        SESSIONS_TABLE: !Ref SessionsTable
+        ACTIVE_PLATES_TABLE: !Ref ActivePlatesTable
+        PROCESSED_TABLE: !Ref ProcessedTable
+        DEVICES_TABLE: !Ref DevicesTable
+        PRICING_TABLE: !Ref PricingTable
+        ALERTS_TABLE: !Ref AlertsTable
+
+Resources:
+  # ── DynamoDB ──────────────────────────────────────────────────────────────
+  SlotsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-slots
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: slot_id, AttributeType: S}]
+      KeySchema: [{AttributeName: slot_id, KeyType: HASH}]
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: session_id, AttributeType: S}]
+      KeySchema: [{AttributeName: session_id, KeyType: HASH}]
+  ActivePlatesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-active-plates
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: plate_normalized, AttributeType: S}]
+      KeySchema: [{AttributeName: plate_normalized, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
+  ProcessedTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-processed
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: message_id, AttributeType: S}]
+      KeySchema: [{AttributeName: message_id, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
+  DevicesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-devices
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: device_id, AttributeType: S}]
+      KeySchema: [{AttributeName: device_id, KeyType: HASH}]
+  PricingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-pricing
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: config_id, AttributeType: S}]
+      KeySchema: [{AttributeName: config_id, KeyType: HASH}]
+  AlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-alerts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: alert_id, AttributeType: S}]
+      KeySchema: [{AttributeName: alert_id, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
+
+  # ── Lambda ────────────────────────────────────────────────────────────────
+  IotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-parking-${Stage}-iot
+      Handler: iot_handler.handler
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ProcessedTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
+        - DynamoDBReadPolicy: {TableName: !Ref PricingTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref AlertsTable}
+        - Statement:
+            - Effect: Allow
+              Action: iot:Publish
+              Resource:
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/gates/gate-01/commands
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/displays/gate-01/commands
+      Events:
+        DeviceMessages:
+          Type: IoTRule
+          Properties:
+            AwsIotSqlVersion: "2016-03-23"
+            Sql: >-
+              SELECT *, topic() AS mqtt_topic FROM 'parking/v1/site-01/#'
+              WHERE message_type <> 'gate_command' AND message_type <> 'display_command'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-parking-${Stage}-api
+      Handler: api_handler.handler
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ProcessedTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref PricingTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref AlertsTable}
+        - Statement:
+            - Effect: Allow
+              Action: iot:Publish
+              Resource:
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/gates/gate-01/commands
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/displays/gate-01/commands
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: "*"
+              Condition:
+                StringEquals: {"ses:FromAddress": !Ref SenderEmail}
+      Events:
+        PublicLayout: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/public/layout, Auth: {Authorizer: NONE}}}
+        PublicClaim: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: "/v1/public/claims/{token}", Auth: {Authorizer: NONE}}}
+        PublicClaimEmail: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/public/claims/{token}/email", Auth: {Authorizer: NONE}}}
+        KioskClaims: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/kiosk/active-claims}}
+        AdminDashboard: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/admin/dashboard}}
+        AdminSessions: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/admin/sessions}}
+        AdminSession: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: "/v1/admin/sessions/{id}"}}
+        AdminResolve: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/sessions/{id}/resolve-plate"}}
+        AdminRenew: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/sessions/{id}/renew-claim"}}
+        AdminPayment: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/sessions/{id}/payment"}}
+        AdminOpenExit: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/sessions/{id}/open-exit"}}
+        AdminConfirm: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/sessions/{id}/confirm-passage"}}
+        AdminDevices: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/admin/devices}}
+        AdminPricingGet: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/admin/pricing}}
+        AdminPricingPut: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: PUT, Path: /v1/admin/pricing}}
+        AdminGate: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/gates/{gate}/command"}}
+        AdminAlertAck: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/admin/alerts/{id}/ack"}}
+
+  JobsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub smart-parking-${Stage}-jobs
+      Handler: jobs.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref ActivePlatesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref PricingTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref AlertsTable}
+      Events:
+        Monitor:
+          Type: Schedule
+          Properties: {Schedule: rate(1 minute), Input: '{"job": "monitor"}'}
+        Purge:
+          Type: Schedule
+          Properties: {Schedule: rate(1 hour), Input: '{"job": "purge"}'}
+
+  IotLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${IotFunction}", RetentionInDays: 7}
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${ApiFunction}", RetentionInDays: 7}
+  JobsLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub "/aws/lambda/${JobsFunction}", RetentionInDays: 7}
+
+  # ── API + Cognito ─────────────────────────────────────────────────────────
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowHeaders: [authorization, content-type, idempotency-key]
+        AllowMethods: [GET, POST, PUT, OPTIONS]
+        MaxAge: 600
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 20
+      Auth:
+        DefaultAuthorizer: Cognito
+        Authorizers:
+          Cognito:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience: [!Ref UserPoolClient]
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub smart-parking-${Stage}
+      AdminCreateUserConfig: {AllowAdminCreateUserOnly: true}
+      Policies:
+        PasswordPolicy: {MinimumLength: 8, RequireLowercase: false, RequireUppercase: false, RequireNumbers: true, RequireSymbols: false}
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: web
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits: {AccessToken: minutes, IdToken: minutes, RefreshToken: days}
+      PreventUserExistenceErrors: ENABLED
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {UserPoolId: !Ref UserPool, GroupName: ADMIN}
+  KioskGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {UserPoolId: !Ref UserPool, GroupName: KIOSK}
+
+  # ── SES ───────────────────────────────────────────────────────────────────
+  SenderIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties: {EmailIdentity: !Ref SenderEmail}
+
+  # ── Web: S3 private + CloudFront (OAC) ────────────────────────────────────
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Condition: UseCdn
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  WebOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: UseCdn
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub smart-parking-${Stage}-oac-${AWS::AccountId}
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: UseCdn
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub smart-parking-${Stage}
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_200
+        HttpVersion: http2
+        Origins:
+          - Id: web
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !Ref WebOac
+            S3OriginConfig: {OriginAccessIdentity: ""}
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # Managed-CachingOptimized
+          Compress: true
+        # SPA: /s/<token>, /admin, /kiosk mở trực tiếp vẫn trả index.html
+        CustomErrorResponses:
+          - {ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0}
+          - {ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0}
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: UseCdn
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}
+
+  # ── Chi phí ───────────────────────────────────────────────────────────────
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub smart-parking-${Stage}
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: !Ref BudgetUsd, Unit: USD}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 50}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+        - Notification: {NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+
+Outputs:
+  Region: {Value: !Ref AWS::Region}
+  ApiUrl: {Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/v1"}
+  WebUrl: {Condition: UseCdn, Value: !Sub "https://${WebDistribution.DomainName}"}
+  WebBucketName: {Condition: UseCdn, Value: !Ref WebBucket}
+  DistributionId: {Condition: UseCdn, Value: !Ref WebDistribution}
+  UserPoolId: {Value: !Ref UserPool}
+  UserPoolClientId: {Value: !Ref UserPoolClient}
+  JobsFunctionName: {Value: !Ref JobsFunction}
