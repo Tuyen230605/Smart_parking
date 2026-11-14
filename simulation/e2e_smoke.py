@@ -102,6 +102,8 @@ def main():
 
     plate = f"99T-{random.randint(10000, 99999)}"
     pi = Device("pi-01").start()
+    if not pi.connected.wait(45):  # mạng chậm: chờ thêm, không gửi sự kiện khi chưa nối được
+        sys.exit("✗ pi-01 chưa kết nối được AWS IoT sau 60 giây — kiểm tra mạng, thử IOT_PORT=443")
     events = topic("vision", "pi-01", "events")
 
     step(f"Xe {plate} quẹt thẻ XANH ở làn vào")

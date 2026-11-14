@@ -6,6 +6,7 @@ Mock dùng **đúng cert, client id, topic và JSON** của thiết bị thật 
 |---|---|---|
 | `mock_gate.py` | ESP32 `gate-01` | Nhận lệnh cần/OLED, kiểm hạn/trùng/đích, ACK `OPENING→OPEN→CLOSING→CLOSED`. `--hold 5`, `--fail-motor`, `--no-ack` |
 | `mock_slots.py` | ESP32 `slots-01` | Gõ `F1-A1` hoặc `0–17` để đảo ô; `s` snapshot; `full`/`clear`; `off 100` ngắt mạng 100 s. Lưu trạng thái như NVS |
+| `fake_car.py` | camera Pi `pi-01` | `fake_car.py vao 51A-12345` / `fake_car.py ra 51A-12345`: một xe quẹt thẻ, dùng để demo QR/cần khi chưa bật Pi |
 | `e2e_smoke.py` | — | Một lượt vào → đỗ → ra → đóng phiên trên AWS thật, qua API admin |
 | `../edge/raspberry-pi-vision/mock_pi.py` | Pi `pi-01` | Sự kiện camera theo kịch bản |
 

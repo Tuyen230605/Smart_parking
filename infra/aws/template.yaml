@@ -48,7 +48,6 @@ Globals:
     Architectures: [arm64]
     MemorySize: 256
     Timeout: 15
-    CodeUri: ../../backend/src/
     Environment:
       Variables:
         SITE_ID: site-01
@@ -129,6 +128,7 @@ Resources:
     Properties:
       FunctionName: !Sub smart-parking-${Stage}-iot
       Handler: iot_handler.handler
+      CodeUri: ../../backend/src/
       Policies:
         - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
         - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
@@ -157,6 +157,7 @@ Resources:
     Properties:
       FunctionName: !Sub smart-parking-${Stage}-api
       Handler: api_handler.handler
+      CodeUri: ../../backend/src/
       Policies:
         - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}
         - DynamoDBCrudPolicy: {TableName: !Ref SessionsTable}
@@ -200,6 +201,7 @@ Resources:
     Properties:
       FunctionName: !Sub smart-parking-${Stage}-jobs
       Handler: jobs.handler
+      CodeUri: ../../backend/src/
       Timeout: 60
       Policies:
         - DynamoDBCrudPolicy: {TableName: !Ref SlotsTable}

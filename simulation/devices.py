@@ -82,8 +82,9 @@ class Device:
         return self
 
     def stop(self):
-        self.client.loop_stop()
+        self._stopping = True
         self.client.disconnect()
+        self.client.loop_stop()
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
@@ -99,7 +100,8 @@ class Device:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self.connected.clear()
-        log.warning("Mất kết nối MQTT (%s), đang thử lại…", reason_code)
+        if not getattr(self, "_stopping", False):
+            log.warning("Mất kết nối MQTT (%s), đang thử lại…", reason_code)
 
     def _on_message(self, client, userdata, msg):
         try:

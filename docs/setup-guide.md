@@ -122,6 +122,15 @@ Mock dùng **đúng cert, client id, topic, JSON** như firmware, nên backend k
 
 > Mạng trường/quán cà phê hay chặn cổng 8883. Thấy mock báo "chưa kết nối được": chạy `IOT_PORT=443 .venv/bin/python simulation/mock_gate.py` (MQTT qua cổng 443).
 
+Giả một xe quẹt thẻ khi chưa có Pi (QR hiện trên `/kiosk`, cần vào mở trong cửa sổ mock_gate):
+
+```bash
+.venv/bin/python simulation/fake_car.py vao 51A-12345     # thẻ xanh làn vào
+.venv/bin/python simulation/fake_car.py ra  51A-12345     # thẻ đỏ làn ra
+```
+
+Nút "Mở tay" trên admin chỉ nhấc cần để thử cơ khí, không tạo lượt xe nên không có QR.
+
 ## 6. Kiểm thử đầu cuối không cần camera (laptop, 1 phút)
 
 Khi mock đang chạy và **pi-vision trên Pi chưa bật** (script mượn client id `pi-01`):
