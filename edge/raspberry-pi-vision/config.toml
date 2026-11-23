@@ -9,6 +9,8 @@ firmware_version = "0.1.0"
 [camera]
 # "picamera2" trên Pi; số webcam ("0"); hoặc đường dẫn ảnh/video fixture.
 source = "picamera2"
+camera_num = 0               # cổng CSI: 0 hoặc 1 (Pi 5 có hai cổng). Lắp camera thứ hai cho bãi xe thì đặt 1
+# Camera Module 3 (12 MP, lấy nét tự động): 2304x1296. Camera v1.3/OV5647 (5 MP, nét cố định): 1920x1080.
 width = 2304
 height = 1296
 fps = 10
