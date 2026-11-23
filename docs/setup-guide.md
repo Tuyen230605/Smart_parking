@@ -159,6 +159,12 @@ Không có internet thì chọn một:
 
 ### 7.2 Đưa code và cert lên Pi
 
+**Nhanh nhất — một lệnh từ laptop** (làm luôn 7.2 và phần cài của 7.3):
+```bash
+cd ~/Code/Cloud-Course/infra/aws && ./setup-pi.sh <user>@<ip-pi>
+```
+Rồi SSH vào Pi chạy `./pi-mode.sh parking` (mục 7.3). Làm tay từng bước:
+
 ```bash
 # Trên Pi (lần đầu)
 git clone https://github.com/Tuyen230605/Smart_parking.git ~/Cloud-Course

@@ -7,7 +7,8 @@ Toàn bộ tài nguyên nằm trong [template.yaml](template.yaml) (CloudFormati
 | `deploy.sh` | Đóng gói Lambda, dựng/cập nhật stack, seed 18 ô + bảng giá, ghi `web/.env.*.local` |
 | `create-users.sh` | Tài khoản Cognito `admin` (ADMIN) và `kiosk` (KIOSK) |
 | `provision-devices.sh` | 3 IoT Thing + cert + policy theo topic; sinh `config.local.toml` cho Pi và `secrets.h` cho ESP32 |
-| `copy-pi-certs.sh` | Chép cert `pi-01` sang Pi qua SSH |
+| `setup-pi.sh` | Một lệnh từ laptop: kiểm tra internet của Pi, clone/pull code, chép cert, cài `pi-vision` |
+| `copy-pi-certs.sh` | Chép cert `pi-01` sang Pi qua SSH (setup-pi.sh gọi sẵn) |
 | `deploy-web.sh` | Build web, upload S3, invalidate CloudFront |
 | `destroy.sh` | Xóa stack, cert, Thing sau khi xong đồ án |
 
