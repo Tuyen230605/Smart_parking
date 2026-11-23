@@ -13,7 +13,7 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 [ -f "$REPO_ROOT/secrets/certs/pi-01/cert.pem" ] || { echo "Chưa có cert pi-01 — chạy ./provision-devices.sh trước"; exit 1; }
 
 echo "→ [1/5] Pi có internet?"
-ssh "$TARGET" 'ping -c1 -W3 amazon.com >/dev/null && echo "  ✓ có internet" || { echo "  ✗ Pi chưa ra được internet (xem docs/setup-guide.md mục 7.1)"; exit 1; }'
+ssh "$TARGET" 'curl -sS -o /dev/null --max-time 8 https://aws.amazon.com && echo "  ✓ có internet" || { echo "  ✗ Pi chưa ra được internet (xem docs/setup-guide.md mục 7.1)"; exit 1; }'
 
 echo "→ [2/5] Lấy code"
 ssh "$TARGET" "command -v git >/dev/null || sudo apt-get install -y git; \

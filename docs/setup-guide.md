@@ -148,7 +148,7 @@ Script đăng nhập admin, giả lập thẻ xanh → kiểm tra gán ô + QR +
 Dự án Smart Lighting cấu hình `wlan0` của Pi **phát Wi-Fi `Oi-Net`** — khi đó Wi-Fi không còn dùng để lên mạng. Kiểm tra trên Pi:
 
 ```bash
-ping -c2 amazon.com && echo "CÓ INTERNET"
+curl -sS -o /dev/null --max-time 8 https://aws.amazon.com && echo "CÓ INTERNET"   # amazon.com chặn ping nên không dùng ping
 nmcli -t -f NAME,DEVICE connection show --active
 ```
 

@@ -68,20 +68,34 @@ class PlateReading:
 
 class PlateReader:
     def __init__(self):
+        self.engine, self.new_api = None, False
         try:
-            from rapidocr_onnxruntime import RapidOCR
+            from rapidocr import RapidOCR  # rapidocr 3.x — chạy được trên Python 3.13 (Pi OS Trixie)
+            self.new_api = True
         except ImportError:
-            log.warning("Chưa cài rapidocr_onnxruntime; mọi lượt sẽ gửi plate_text=null")
-            self.engine = None
-            return
+            try:
+                from rapidocr_onnxruntime import RapidOCR  # bản cũ, Python <= 3.12
+            except ImportError:
+                log.warning("Chưa cài rapidocr; mọi lượt sẽ gửi plate_text=null")
+                return
         self.engine = RapidOCR()
+
+    def _ocr(self, img):
+        """Trả list (box, text, score) cho cả hai API."""
+        if self.new_api:
+            out = self.engine(img)
+            if out.boxes is None or out.txts is None:
+                return []
+            return list(zip(out.boxes.tolist(), out.txts, out.scores))
+        result, _ = self.engine(img)
+        return result or []
 
     def read(self, img):
         if self.engine is None or img.size == 0:
             return PlateReading(None, 0.0)
         if img.shape[0] < 96:
             img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        result, _ = self.engine(img)
+        result = self._ocr(img)
         if not result:
             return PlateReading(None, 0.0)
         # Ghép các dòng chữ từ trên xuống, trái sang phải để đọc được cả biển hai dòng.

@@ -14,6 +14,8 @@ echo "→ venv $VENV"
 [ -d "$VENV" ] || python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/pip" install -q -r "$HERE/requirements.txt"
 (cd "$HERE" && "$VENV/bin/python" -m unittest -q test_detector)
+echo "→ tải model OCR (lần đầu ~30 MB)"
+(cd "$HERE" && "$VENV/bin/python" -c "from detector import PlateReader; assert PlateReader().engine, 'OCR chưa cài được'" 2>&1 | grep -v INFO || true)
 
 [ -f "$HERE/config.local.toml" ] || echo "⚠ Chưa có config.local.toml — chạy infra/aws/copy-pi-certs.sh từ laptop"
 [ -f /etc/parking/certs/pi-01.private.key ] || echo "⚠ Chưa có cert trong /etc/parking/certs"
