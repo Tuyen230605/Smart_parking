@@ -5,83 +5,85 @@ Tham chiếu [kiến trúc](architecture.md), [sơ đồ bãi](parking-layout.md
 ## Tác nhân
 
 - **Khách:** lái xe, có thể không cung cấp email; không cần tài khoản.
-- **Quản trị:** đăng nhập, xác nhận trường hợp lỗi, thu phí thủ công, xác nhận xe qua cổng.
-- **Pi vision:** phát hiện màu thẻ/biển số/làn từ một camera.
-- **ESP gate:** điều khiển hai cần và OLED.
-- **ESP slots:** báo 18 trạng thái ô, trong đó F1-A1 là cảm biến thật.
-- **Backend:** quyết định nghiệp vụ duy nhất.
+- **Quản trị:** đăng nhập, bấm *Cho vào* / *Cho ra* (mở cần), thu phí thủ công.
+- **Pi vision:** phát hiện có vật (tay/xe mô hình) ở vùng làn vào/ra từ một camera; không đọc biển.
+- **ESP gate:** một servo 3 vị trí (thẳng = đóng, trái = mở vào, phải = mở ra) và OLED.
+- **ESP slots:** báo 18 trạng thái ô, mỗi ô một nút bấm; chỉ để chỉ chỗ trống.
+- **Backend:** quyết định nghiệp vụ duy nhất; đánh biển số demo; nguồn duy nhất của danh sách xe trong bãi.
 
 ## Trạng thái phiên
 
 ```text
-DETECTED → RESERVED → ENTRY_GATE_OPEN → PARKED
-                                  ↘ EXPIRED (không vào ô)
-PARKED → EXIT_REQUESTED → PAYMENT_PENDING → EXIT_GATE_OPEN
-       → EXIT_CONFIRMED → CLOSED
-DETECTED/EXIT_REQUESTED → MANUAL_REVIEW (OCR, lane hoặc thiết bị không chắc chắn)
+camera thấy xe ở làn VÀO → ENTRY_PENDING ──(quản trị: Cho vào → mở cần vào)──→ PARKED
+                                          └─(quản trị: Không cho vào)─────────→ REJECTED
+camera thấy xe ở làn RA  → PARKED → EXIT_REQUESTED (khóa phí)
+                         ──(quản trị: Cho ra / Đã thu tiền → mở cần ra)──→ CLOSED
 ```
 
-`PARKED` chỉ có sau khi ô được gán báo có xe. `CLOSED` cần thao tác xác nhận xe ra từ quản trị. Mọi chuyển trạng thái phải có `event_id` và chỉ chạy một lần.
+Xe nằm trong **danh sách xe trong bãi** khi phiên ở `PARKED` hoặc `EXIT_REQUESTED`. Danh sách hiện ở web (Quản trị → Tổng quan) và trang camera trên Pi, chỉ đổi sau khi quản trị bấm. Mọi sự kiện có `event_id` và chỉ xử lý một lần. Nút ô không làm đổi trạng thái phiên.
 
-## UC-01: Xe vào, có ô, không nhập email
+## Biển số demo
 
-**Điều kiện:** thẻ xanh trong vùng làn vào, OCR đủ tin cậy, không có phiên đang mở cho biển số, có ô `AVAILABLE`.
+Pi không đọc biển. Khi có xe ở làn vào, backend đặt biển là **số nhỏ nhất chưa dùng** bởi xe trong bãi hoặc xe đang chờ vào: chưa có xe → `11111`; đã có `11111`, `22222` → `33333`. Từ xe thứ 10 lặp số 3 lần (`101010`) để không trùng. Khi có xe ở làn ra, backend chọn xe **số lớn nhất** đang đỗ (chưa yêu cầu ra). Nếu Pi gửi biển đọc được với độ tin cậy đủ ngưỡng thì backend dùng biển đó.
 
-1. Pi phát `entry_detected`; backend chuẩn hóa biển số và chống sự kiện lặp.
-2. Backend giữ ô bằng ghi có điều kiện, tạo phiên và đường đi; kiosk nhận QR phiên.
-3. Backend phát `open` cho `entry`; ESP gate mở đúng cần và ACK.
-4. OLED hiện `F1-A1 | Tầng 1 | Hàng A | Ô 1`; kiosk hiển thị QR và hướng dẫn.
-5. Khách bỏ qua QR; không có email.
-6. Khi trạng thái ô được gán thành `occupied=true`, phiên chuyển `PARKED`.
+## UC-01: Xe vào, không nhập email
 
-**Kết quả:** xe vào và được hướng dẫn ngay cả khi không cung cấp liên hệ.
+**Điều kiện:** Pi thấy vật ở vùng làn vào; bãi chưa đầy (hoặc board ô offline).
 
-## UC-02: Xe vào, quét QR và nhận email của lượt này
+1. Pi phát `vehicle_detected` (`lane_id=ENTRY`, không biển số); backend chống sự kiện lặp, đánh biển demo, tạo phiên `ENTRY_PENDING`. OLED hiện `XE 11111 / Cho nhan vien`.
+2. Trang Phiên đỗ hiện thẻ "Chờ cho vào" với biển số; trang camera Pi hiện "Chờ cho vào: 11111".
+3. Quản trị bấm **Cho vào (mở cần vào)** → phiên `PARKED`, backend phát `OPEN ENTRY`; servo quay trái, sau 5 giây tự về giữa.
+4. OLED hiện ô trống gợi ý (`VAO: goi y F1-A2`, `Con N cho trong`); kiosk hiển thị QR kèm bản đồ đường đi.
+5. Xe vào danh sách xe trong bãi. Khách bỏ qua QR; không có email.
 
-**Điều kiện:** UC-01 đã tạo phiên, token QR chưa quá 15 phút.
+Quản trị bấm **Không cho vào** → phiên `REJECTED`, số biển được dùng lại cho xe sau.
 
-1. Khách quét QR phiên trên màn hình kiosk; trang `/s/{token}` trả số ô và chỉ dẫn, không hiện biển số đầy đủ.
-2. Khách nhập email, đánh dấu đồng ý nhận email hướng dẫn cho **lượt này**, bấm gửi.
-3. API kiểm tra token, thời hạn, định dạng email và giới hạn một lần gửi/phiên; ghi email vào phiên và gọi SES.
-4. Web báo đã yêu cầu gửi; backend ghi `email_status` (`QUEUED/ACCEPTED_BY_SES/FAILED`). SES chấp nhận yêu cầu không đồng nghĩa thư đã tới inbox. Nếu gửi lỗi, khách vẫn thấy đường trên web/OLED.
-5. Khi phiên kết thúc, email có thể xóa ngay; muộn nhất xóa sau 10 ngày từ lúc nhập.
+## UC-02: Quét QR, chọn ô, nhận email
 
-**Kết quả:** không cần đăng ký tài khoản. Lượt sau không tự gửi vào email này; khách nhập lại nếu muốn.
+**Điều kiện:** UC-01 đã cho vào, token QR chưa quá 15 phút.
 
-## UC-03: Xe quay lại sau lần trước
+1. Khách quét QR trên kiosk; trang `/s/{token}` hiện ô trống gần cổng nhất (gợi ý), bản đồ hai tầng và đường đi vẽ từ cổng vào. Không hiện biển số.
+2. Khách **chạm một ô trống khác** để chọn; đường đi vẽ lại. Ô tầng 2: bản đồ tầng 1 vẽ tới ram, ghi "đi tiếp lên tầng 2", bản đồ tầng 2 vẽ từ đầu ram tới ô.
+3. Khách nhập email, đồng ý nhận email cho lượt này, bấm gửi. Email ghi đường tới ô đã chọn và link mở lại bản đồ.
+4. API giới hạn một lần gửi/phiên; ghi `email_status` (`QUEUED/ACCEPTED_BY_SES/FAILED`). SES lỗi không ảnh hưởng việc xe vào.
 
-Backend tạo phiên và QR mới như UC-01. Không tìm email theo biển số cũ và không gửi email tự động. Nếu khách muốn nhận, thực hiện UC-02 một lần nữa. Sự kiện/biển số cũ đã xóa sau tối đa 10 ngày.
+Gợi ý/chọn ô chỉ là chỉ đường: ô không bị giữ, xe khác vẫn có thể đỗ vào.
 
-## UC-04: Bãi đầy hoặc ô không đáng tin
+## UC-03: Ghi nhớ email cho biển số (khách tự chọn)
 
-Backend chỉ tính các ô `AVAILABLE` có dữ liệu mới. Nếu không còn ô, trả `LOT_FULL`; không mở cần vào, OLED/kiosk hiện “Bãi đầy”. Nếu ESP slots mất kết nối quá 90 giây, tất cả ô do board đó quản lý thành `UNKNOWN`; không gán trên dữ liệu cũ.
+1. Ở bước 3 của UC-02, khách tích **"Ghi nhớ email cho biển số xe này"** (mặc định không tích).
+2. Lần sau xe có biển đó được *Cho vào*, backend **tự gửi email chỉ dẫn** (ô gợi ý + link bản đồ), không cần quét QR; trang QR báo "đã tự gửi".
+3. Mỗi email tự gửi có link **Hủy liên kết**; trang QR hiện email đã che (`kh***@gmail.com`) và nút **Bỏ liên kết email**.
+4. Không tích thì email chỉ dùng cho lượt đó và bị xóa muộn nhất sau 10 ngày.
 
-## UC-05: Xe không vào ô được gán
+**Lưu ý demo:** biển demo được dùng lại cho xe sau, nên bỏ liên kết sau khi thử.
 
-Sau 5 phút `RESERVED` mà ô chưa báo có xe, backend chuyển `EXPIRED`, giải phóng ô chỉ khi trạng thái vẫn trống và báo quản trị. Nếu một ô khác báo có xe, không tự gán lại; quản trị kiểm tra rồi sửa phiên bằng thao tác có log.
+## UC-04: Bãi đầy hoặc board ô mất kết nối
 
-## UC-06: Xe yêu cầu ra và tính phí
+Khi quản trị bấm *Cho vào* mà board ô đang online và không còn ô `AVAILABLE` → báo "Bãi đã đầy", không mở cần, OLED hiện "BAI DA DAY". Nếu ESP slots mất kết nối quá 90 giây, mọi ô thành `UNKNOWN`; xe vẫn được cho vào nhưng không có ô gợi ý (khách vẫn chọn được ô trên bản đồ).
 
-**Điều kiện:** thẻ đỏ ở vùng làn ra, OCR đủ tin cậy, tìm đúng một phiên `PARKED`.
+## UC-05: Xe ra và tính phí
 
-1. Pi phát `exit_requested`; backend tìm phiên còn mở theo biển số.
-2. Backend đặt `charge_end_at = exit_requested_at` và tính phí của lượt theo cấu hình giá: miễn phí dưới 15 phút; đến 60 phút 10.000 ₫; mỗi giờ tiếp theo bắt đầu +5.000 ₫. Mức này chỉ là ví dụ demo.
-3. OLED cổng ra và web quản trị hiện phí, biển số được che một phần ở màn hình công khai.
-4. Nếu phí 0 ₫, trạng thái là `NO_CHARGE`; nếu có phí, quản trị thu tiền và bấm `PAID_CASH`, hoặc `WAIVED` có lý do. Backend phát lệnh mở cần ra; ESP gate ACK.
-5. Quản trị xác nhận xe đã qua; backend ghi `exit_confirmed_at` và đóng phiên. Tiền đã khóa ở bước 2, không tăng trong lúc khách thanh toán.
-6. Ô được giải phóng chỉ khi ESP slots báo trống. Nếu chưa, web báo bất nhất.
+1. Pi thấy vật ở vùng làn ra → backend chọn xe số lớn nhất đang đỗ, đặt `charge_end_at` và tính phí: miễn phí dưới 15 phút; đến 60 phút 10.000 ₫; mỗi giờ tiếp theo bắt đầu +5.000 ₫ (ví dụ demo). Phiên sang `EXIT_REQUESTED`.
+2. Trang Phiên đỗ hiện thẻ "Chờ cho ra" với **phí chữ lớn**; OLED cổng hiện phí. Cần ra **không tự mở**, kể cả miễn phí.
+3. Phí 0 ₫ → quản trị bấm **Cho ra (mở cần)**. Có phí → bấm **Đã thu X ₫ → cho ra** (`PAID_CASH`) hoặc **Miễn phí** có lý do (`WAIVED`).
+4. Backend phát `OPEN EXIT` (servo quay phải), phiên `CLOSED` ngay, xe rời danh sách xe trong bãi. Phí đã khóa ở bước 1, không tăng trong lúc thu tiền.
+5. Ô về trống khi nút ô được bấm lại.
 
-**Kết quả:** có phiếu tính phí trong admin; không có thanh toán online thật.
+Bãi không còn xe đang đỗ mà Pi báo xe ra → bỏ qua (`NO_CAR`).
 
-## UC-07: OCR kém, sai làn, thẻ không hợp lệ
+## UC-06: Sự kiện bất thường
 
-- `plate_confidence` dưới ngưỡng cấu hình, không thấy biển số, thẻ xanh ở làn ra, thẻ đỏ ở làn vào hoặc hai xe xuất hiện cùng khung → `MANUAL_REVIEW`.
-- Không mở cần tự động. Quản trị xem thông tin tối thiểu, nhập/đính chính biển số và chọn cho vào/ra bằng thao tác có log.
-- Một camera không đủ độ phân giải cho cả hai làn thì chạy demo theo từng làn hoặc đổi góc camera, không giả lập OCR đúng.
+- Thẻ/làn không hợp lệ (Pi gửi sai cặp làn–màu) → bỏ qua, ghi log. Không còn hàng "chờ duyệt" riêng.
+- Camera báo lặp khi tay vẫn trong khung → Pi chỉ báo một lần, phải rút tay ra mới nhận lượt mới; lượt thừa thì quản trị bấm *Không cho vào*.
 
-## UC-08: Nút giả lập và cảm biến thật
+## UC-07: Trang camera trên Pi
 
-F1-A1 dùng một cảm biến ToF thật. 17 ô khác có một nút riêng/ô. Mỗi nhấn hợp lệ (debounce khoảng 50 ms) đảo `occupied`; nhấn tiếp đảo lại. ESP lưu trạng thái nút vào NVS, gửi `slot_changed` ngay và `slots_snapshot` mỗi 30 giây/khởi động lại. Web gắn nhãn “cảm biến” hoặc “mô phỏng” để không nhầm.
+`http://<ip-pi>:8000` hiện video, hai khung làn, danh sách xe trong bãi / chờ vào / chờ ra (backend gửi qua MQTT), nút **Thử xe VÀO / Thử xe RA** (giả lập khi chưa chỉnh camera) và **Chụp lại nền**.
+
+## UC-08: Nút giả lập
+
+Mỗi ô trong 18 ô có một nút riêng. Mỗi nhấn hợp lệ (debounce khoảng 50 ms) đảo `occupied`; nhấn tiếp đảo lại. ESP lưu trạng thái nút vào NVS, gửi `slot_changed` ngay và `slots_snapshot` mỗi 30 giây/khởi động lại. Web ghi rõ các ô là nút mô phỏng.
 
 ## UC-09: Sự cố kết nối/lệnh trùng
 
@@ -89,7 +91,7 @@ F1-A1 dùng một cảm biến ToF thật. 17 ô khác có một nút riêng/ô.
 - Lệnh cần chắn hết hạn hoặc không đúng `target` bị bỏ qua và ACK lỗi.
 - Mất AWS/Wi-Fi: ESP không nhận lệnh mới; không tự mở cần. OLED hiện “Mất kết nối”; quản trị thao tác thủ công tại mô hình sau khi kiểm tra cơ cấu.
 - Servo không ACK mở/đóng đúng hạn → backend cảnh báo, không suy luận xe đã qua.
-- Email SES lỗi → ghi trạng thái thất bại, không rollback việc gán ô.
+- Email SES lỗi → ghi trạng thái thất bại, không ảnh hưởng việc cho xe vào.
 
 ## UC-10: Xóa dữ liệu sau 10 ngày
 
@@ -99,13 +101,13 @@ Biển số, email, token và sự kiện có thể nhận dạng được từ 
 
 | Mã | Kết quả phải thấy |
 |---|---|
-| UC-01 | Có QR và OLED chỉ ô, không có email |
-| UC-02 | Khách nhập email một lần, nhận đúng hướng dẫn phiên |
-| UC-03 | Lượt mới không tự dùng email cũ |
-| UC-04 | Bãi đầy/dữ liệu ô cũ không mở cần |
-| UC-05 | Giữ ô hết hạn được giải phóng có điều kiện |
-| UC-06 | Phí được tính và có xác nhận thu tiền/xe qua cổng |
-| UC-07 | OCR/sai làn chuyển duyệt thủ công |
-| UC-08 | Một ô sensor, 17 ô nút; trạng thái đúng sau restart |
+| UC-01 | Xe vào chờ quản trị; bấm Cho vào thì servo quay trái, xe vào danh sách, kiosk có QR |
+| UC-02 | Chọn ô trên bản đồ, đường đi vẽ đúng (tầng 2 có lên ram); email đúng ô đã chọn |
+| UC-03 | Tích ghi nhớ → lần sau tự gửi email; hủy liên kết thì không gửi nữa |
+| UC-04 | Bãi đầy không mở cần; board ô offline vẫn cho vào |
+| UC-05 | Xe ra hiện phí, chỉ mở cần khi bấm Cho ra; xe rời danh sách |
+| UC-06 | Sự kiện sai/lặp không tạo mở cần |
+| UC-07 | Trang camera hiện đúng danh sách như web |
+| UC-08 | 18 nút; trạng thái đúng sau restart |
 | UC-09 | Replay/mất mạng không gây mở cần trùng |
 | UC-10 | Dữ liệu định danh quá 10 ngày không còn truy cập được |

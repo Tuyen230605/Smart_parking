@@ -3,6 +3,7 @@ import { usingMock } from "./api";
 import { UserBadge } from "./components/RequireAuth";
 import { AdminPage } from "./pages/admin/AdminPage";
 import { ClaimPage } from "./pages/guest/ClaimPage";
+import { UnsubscribePage } from "./pages/guest/UnsubscribePage";
 import { KioskPage } from "./pages/kiosk/KioskPage";
 import { LayoutPage } from "./pages/public/LayoutPage";
 
@@ -35,4 +36,5 @@ export const router = createBrowserRouter([
     ],
   },
   { path: "/s/:token", element: <ClaimPage /> },   // người 1: URL trong QR, không có menu
+  { path: "/huy-email/:token", element: <UnsubscribePage /> }, // link hủy liên kết trong email tự gửi
 ]);

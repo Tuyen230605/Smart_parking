@@ -39,12 +39,14 @@ export function createHttpApi(base: string): Api {
   return {
     getLayout: () => request(base, "/public/layout"),
     getClaim: (token) => request(base, `/public/claims/${encodeURIComponent(token)}`),
-    submitClaimEmail: (token, email, consent, idempotencyKey) =>
+    submitClaimEmail: (token, email, consent, idempotencyKey, slotId, remember) =>
       request(base, `/public/claims/${encodeURIComponent(token)}/email`, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
-        body: JSON.stringify({ email, consent_for_this_session: consent }),
+        body: JSON.stringify({ email, consent_for_this_session: consent, slot_id: slotId ?? undefined, remember: !!remember }),
       }),
+    forgetClaimEmail: (token) => request(base, `/public/claims/${encodeURIComponent(token)}/forget-email`, { method: "POST" }),
+    unsubscribe: (token) => request(base, `/public/unsubscribe/${encodeURIComponent(token)}`, { method: "POST" }),
     getActiveClaims: () => request(base, "/kiosk/active-claims", {}, true),
     getDashboard: () => admin("/dashboard"),
     listSessions: (status) => admin(`/sessions?limit=100${status ? `&status=${encodeURIComponent(status)}` : ""}`),

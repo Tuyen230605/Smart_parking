@@ -23,7 +23,6 @@ PI_ID, GATE_ID, SLOTS_ID = "pi-01", "gate-01", "slots-01"
 DEVICES = (PI_ID, GATE_ID, SLOTS_ID)
 
 PLATE_THRESHOLD = float(os.environ.get("PLATE_THRESHOLD", "0.85"))
-RESERVATION_TIMEOUT = timedelta(minutes=5)
 CLAIM_TTL = timedelta(minutes=15)
 DEVICE_TIMEOUT = timedelta(seconds=90)
 IDENTITY_TTL = timedelta(days=10)
@@ -33,30 +32,50 @@ ACK_TIMEOUT = timedelta(seconds=15)
 
 # 18 ô theo docs/parking-layout.md, đúng thứ tự ưu tiên gán (gần cổng trước).
 SLOT_IDS = [f"F{f}-{r}{c}" for f in (1, 2) for r in "ABC" for c in (1, 2, 3)]
-SENSOR_SLOT = "F1-A1"
 
-OPEN_STATES = ("MANUAL_REVIEW", "RESERVED", "PARKED", "EXIT_REQUESTED", "EXIT_OPENED")
+OPEN_STATES = ("ENTRY_PENDING", "MANUAL_REVIEW", "RESERVED", "PARKED", "EXIT_REQUESTED", "EXIT_OPENED")
+# Xe đang ở trong bãi (đã được cho vào, chưa được cho ra). RESERVED/EXIT_OPENED là trạng thái cũ, giữ để tương thích.
+IN_LOT_STATES = ("RESERVED", "PARKED", "EXIT_REQUESTED", "EXIT_OPENED")
 
 
-def slot_source(slot_id):
-    return "SENSOR" if slot_id == SENSOR_SLOT else "BUTTON"
+def demo_plate(k):
+    """Biển số demo của xe thứ k: 11111 … 99999, từ 10 trở đi lặp 3 lần (101010) để không trùng."""
+    return str(k) * 5 if k < 10 else str(k) * 3
+
+
+def demo_number(plate):
+    """Ngược của demo_plate; None nếu không phải biển demo."""
+    key = plate_key(plate) or ""
+    for k in range(1, 100):
+        if demo_plate(k) == key:
+            return k
+    return None
+
+
+def slot_source(slot_id):  # noqa: ARG001 — giữ chữ ký; sa bàn không còn cảm biến thật
+    """Cả 18 ô đều là nút bấm trên sa bàn."""
+    return "BUTTON"
 
 
 def route_steps(slot_id):
-    """Lộ trình đầy đủ tiếng Việt cho web/email."""
+    """Lộ trình đầy đủ tiếng Việt cho web/email (khớp hình vẽ RouteMap trên web)."""
     floor, row, col = slot_id[1], slot_id[3], slot_id[4]
-    first = "Tầng 1, đi thẳng từ cổng vào" if floor == "1" else f"Lên ram tầng {floor}"
-    return [first, f"Đi đến hàng {row}", f"Ô số {col}"]
+    if floor == "1":
+        return ["Qua cổng vào, đi theo lối chính bên trái", f"Rẽ phải vào lối đi hàng {row}",
+                f"Ô {slot_id} ở cột {col}, phía trên lối đi"]
+    return ["Qua cổng vào, đi theo lối chính bên trái đến cuối lối C", "Đi hết lối C, LÊN RAM lên tầng 2",
+            f"Tầng 2: đi theo lối chính, rẽ phải vào lối đi hàng {row}", f"Ô {slot_id} ở cột {col}, phía trên lối đi"]
 
 
-def oled_route(slot_id):
-    """Bản rút gọn ASCII ≤ 20 ký tự/dòng cho OLED."""
+def oled_hint(slot_id, free_count):
+    """OLED lúc xe vào (≤ 20 ký tự/dòng): gợi ý ô trống gần nhất, không phải ô được gán."""
+    if slot_id is None:
+        return ["MOI VAO", "Tu tim cho trong", ""]
     floor, row, col = slot_id[1], slot_id[3], slot_id[4]
-    second = f"Tang 1 - Hang {row}" if floor == "1" else f"Len tang {floor}-Hang {row}"
-    return [f"VAO: {slot_id}", second, f"O so {col}"]
+    where = f"Tang {floor} hang {row} o {col}"
+    return [f"VAO: goi y {slot_id}", where, f"Con {free_count} cho trong"]
 
 
-# ── thời gian ──────────────────────────────────────────────────────────────
 def now():
     return datetime.now(timezone.utc)
 
@@ -97,12 +116,23 @@ def new_uuid():
     return str(uuid.uuid4())
 
 
+LOT_TOPIC_LEAF = "lot"  # parking/v1/<site>/vision/pi-01/lot: backend → Pi, danh sách xe trong bãi
+
+
 def plate_key(text):
     """Khóa so khớp biển số: chỉ chữ/số in hoa ('51a-123.45' → '51A12345')."""
     if not text:
         return None
     key = re.sub(r"[^A-Z0-9]", "", str(text).upper())
     return key or None
+
+
+def mask_email(email):
+    """'nguyenvana@gmail.com' → 'ng***@gmail.com' (đủ để khách nhận ra, không lộ hết)."""
+    if not email or "@" not in email:
+        return None
+    name, domain = email.split("@", 1)
+    return f"{name[:2]}***@{domain}"
 
 
 def mask_plate(text):
@@ -114,6 +144,7 @@ def mask_plate(text):
 # ── DynamoDB ───────────────────────────────────────────────────────────────
 TABLE_ENV = {
     "slots": "SLOTS_TABLE",
+    "plate_emails": "PLATE_EMAILS_TABLE",
     "sessions": "SESSIONS_TABLE",
     "plates": "ACTIVE_PLATES_TABLE",
     "processed": "PROCESSED_TABLE",

@@ -68,6 +68,7 @@ h2 { font-size: 1.1rem; margin-top: 0; }
 .error-text { color: var(--occupied); }
 
 .slot-id { font-size: 3.5rem; margin: 4px 0 8px; letter-spacing: 0.02em; }
+.slot-hint { font-size: 1.6rem; font-weight: 600; margin: 8px 0; }
 .route { font-size: 1.15rem; padding-left: 1.4em; margin: 0 0 12px; }
 .route li { margin-bottom: 4px; }
 
@@ -194,3 +195,29 @@ button.link { width: auto; padding: 0 4px; background: none; color: var(--accent
 .fee { font-size: 1.4rem; }
 .history { font-size: 0.85rem; color: var(--muted); }
 .narrow-card { max-width: 480px; }
+
+.exit-pending { border-left: 4px solid #e8a400; padding-left: 10px; }
+.exit-pending .fee { font-size: 1.6rem; }
+
+.entry-pending { border-left: 4px solid var(--accent); padding-left: 10px; }
+.entry-pending .fee { font-size: 1.6rem; }
+.lot-plates { font-size: 1.4rem; font-weight: 600; letter-spacing: 0.04em; }
+.route-map { margin: 0; }
+.route-map figcaption { font-weight: 600; margin-bottom: 4px; }
+.route-map svg { width: 100%; height: auto; display: block; }
+.route-map .aisle { stroke: color-mix(in srgb, var(--muted) 45%, transparent); stroke-width: 10; stroke-linecap: round; }
+.route-map .gate { fill: var(--accent); }
+.route-map .gate-label { fill: #fff; font-size: 10px; font-weight: 700; text-anchor: middle; }
+.route-map .ramp-label { fill: var(--muted); font-size: 11px; text-anchor: end; }
+.route-map .map-slot rect { fill: var(--surface); stroke: var(--muted); stroke-width: 2; }
+.route-map .map-slot text { font-size: 13px; text-anchor: middle; fill: currentColor; pointer-events: none; }
+.route-map .map-available rect { stroke: var(--available); }
+.route-map .map-occupied rect { fill: color-mix(in srgb, var(--occupied) 25%, transparent); stroke: var(--occupied); }
+.route-map .map-unknown rect, .route-map .map-out_of_service rect { stroke-dasharray: 5 4; }
+.route-map .map-pickable { cursor: pointer; }
+.route-map .map-pickable:hover rect { stroke-width: 4; }
+.route-map .map-target rect { fill: var(--accent); stroke: var(--accent); }
+.route-map .map-target text { fill: #fff; font-weight: 700; }
+.route-map .route-line { fill: none; stroke: #e8a400; stroke-width: 5; stroke-linejoin: round; stroke-dasharray: 10 6; }
+.route-map .route-arrow { fill: #e8a400; }
+.ramp-note { color: #e8a400; }

@@ -31,10 +31,10 @@ Mỗi người sở hữu **một thiết bị + một phần của web app chun
 
 ## Người 1 — Pi/camera + trang khách
 
-**Đã có:** pipeline nhận thẻ/OCR/publish ([README](../edge/raspberry-pi-vision/README.md)), `mock_pi.py`, khung web app, trang `/s/:token` hoàn chỉnh chạy bằng mock.
+**Đã có:** pipeline phát hiện xe trong làn/publish ([README](../edge/raspberry-pi-vision/README.md)), `mock_pi.py`, khung web app, trang `/s/:token` hoàn chỉnh chạy bằng mock.
 
 Còn lại:
-- [ ] Cài lên Pi 5, hiệu chỉnh ROI/HSV/`plate_roi` trên sa bàn, in biển số và thẻ màu.
+- [x] Cài lên Pi 5 (phát hiện vật bằng so nền, không cần thẻ/biển in); còn: hiệu chỉnh ROI/`[presence]` trên sa bàn thật.
 - [ ] Quay video fixture: vào, ra, sai làn, thiếu sáng. Ghi tỉ lệ đúng màu/biển số (số mẫu + cách tính) cho báo cáo.
 - [ ] Nhận cert `pi-01` từ người 4 → chuyển `config.toml` sang AWS IoT, chạy systemd.
 - [ ] Nối trang khách với API thật; kiểm tra token hết hạn (410), gửi email trùng (409), không nhập email.
@@ -44,7 +44,7 @@ Còn lại:
 ## Người 2 — ESP32 cổng + kiosk
 
 Firmware `gate-01` (Arduino hoặc ESP-IDF):
-- [ ] Hai servo ở **hai GPIO riêng**, nguồn 5 V riêng chung mass; OLED I²C 128×64.
+- [ ] Một servo SG90 ở GPIO18 (thẳng = đóng, trái = vào, phải = ra), nguồn 5 V chung mass; OLED I²C 128×64 tuỳ chọn.
 - [ ] Wi-Fi + **đồng bộ NTP** (bắt buộc để so `expires_at`), MQTT TLS tới AWS IoT với cert `gate-01`.
 - [ ] Subscribe `gates/gate-01/commands`: bỏ lệnh sai `schema_version`/`target_device_id`, quá `expires_at`, trùng `command_id` (nhớ ~20 ID gần nhất); trả `gate_telemetry` `OPENING → OPEN → CLOSING → CLOSED` hoặc `ERROR` + `error_code`. Tự đóng sau thời gian cấu hình.
 - [ ] Subscribe `displays/gate-01/commands`: hiện tối đa 3 dòng × 20 ký tự, ACK `SHOWN`; ưu tiên `ERROR` > `EXIT_FEE` > `ENTRY_ROUTE`.
@@ -53,15 +53,15 @@ Firmware `gate-01` (Arduino hoặc ESP-IDF):
 
 Web:
 - [ ] `/kiosk`: poll `GET /kiosk/active-claims` 2–3 giây, hiện **QR lớn** của phiên mới nhất (thư viện `qrcode`), ô + lộ trình, tự ẩn khi hết hạn, chế độ toàn màn hình.
-- [ ] Component trạng thái hai cần + nút mở cổng ra, gọi API `open-exit` của người 4, đặt trong trang admin.
+- [x] Nút Cho vào / Cho ra trên trang Phiên đỗ (gọi `resolve-plate` / `open-exit`).
 
-**Bàn giao:** log `gate_telemetry`/`display_telemetry` của cả hai cần; video servo mở đúng cần.
+**Bàn giao:** log `gate_telemetry`/`display_telemetry` cho ENTRY/EXIT; video servo quay đúng hướng.
 
 ## Người 3 — ESP32 ô + sơ đồ bãi
 
 Firmware `slots-01`:
-- [ ] Hai MCP23017 (0x20, 0x21) + VL53L0X (0x29) cùng bus I²C 3,3 V; 17 nút active-low pull-up theo [bảng ánh xạ](parking-layout.md).
-- [ ] Nút: debounce, mỗi lần nhấn đảo `occupied`, lưu NVS. ToF: lấy nhiều mẫu + ngưỡng trễ, hiệu chỉnh trên sa bàn thật.
+- [x] 18 nút nối thẳng GPIO theo [bảng ánh xạ](parking-layout.md) (bỏ MCP23017/VL53L0X).
+- [x] Nút: debounce, mỗi lần nhấn đảo `occupied`, lưu NVS.
 - [ ] `slot_changed` ngay khi đổi; `slots_snapshot` **đủ 18 ô** lúc boot/reconnect và mỗi 30 giây; `boot_id` + `seq`; `device_status`.
 - [ ] `simulation/mock_slots.py`: bật/tắt ô từ bàn phím, phát snapshot, giả lập mất kết nối.
 
@@ -69,7 +69,7 @@ Web:
 - [ ] `/`: chú thích màu, số ô trống mỗi tầng, nhãn "cảm biến"/"mô phỏng", hiển thị `UNKNOWN` khi board offline, thời điểm cập nhật.
 - [ ] Giữ `FloorMap` là component dùng chung: không đổi prop `highlight` vì trang khách đang dùng.
 
-**Bàn giao:** danh sách 18 ID, log snapshot sau boot/reconnect, tỉ lệ phát hiện đúng ToF.
+**Bàn giao:** danh sách 18 ID, log snapshot sau boot/reconnect.
 
 ## Người 4 — AWS/backend + quản trị
 
@@ -78,12 +78,12 @@ Hạ tầng (theo [aws-deployment.md](aws-deployment.md)):
 - [ ] DynamoDB 6 bảng, IoT Rules → Lambda, API Gateway (CORS cho domain web), Cognito nhóm `ADMIN`/`KIOSK`, SES sender, EventBridge purge, S3 + CloudFront cho web.
 
 Backend:
-- [ ] `vehicle_detected` → dedupe → transaction giữ ô + tạo phiên → gửi `gate_command` + `display_command`; ca lỗi chuyển `MANUAL_REVIEW`.
+- [x] `vehicle_detected` → dedupe → biển demo → phiên chờ vào/chờ ra; quản trị cho phép → `gate_command` + `display_command` + `lot_state`.
 - [ ] Slot state, device status timeout 90 giây, tính phí theo bảng giá, token QR HMAC 15 phút, email SES một lần/phiên.
 - [ ] Tất cả endpoint trong [api-contract.md](api-contract.md), trả lỗi đúng `code`.
 
 Web:
-- [ ] `src/auth.ts` nối Cognito; `/admin`: dashboard, danh sách/chi tiết phiên, sửa OCR, thu phí, mở cổng ra (dùng component của người 2), xác nhận xe qua, thiết bị, bảng giá.
+- [ ] `src/auth.ts` nối Cognito; `/admin`: dashboard + danh sách xe trong bãi, Cho vào/Cho ra, thu phí, thiết bị, bảng giá.
 - [ ] Deploy web; gửi nhóm URL API để điền `VITE_API_BASE_URL`.
 
 **Bàn giao:** URL API + tài khoản demo admin/kiosk, cert từng thiết bị, hướng dẫn deploy.

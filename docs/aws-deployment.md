@@ -8,7 +8,7 @@ Tài liệu chuẩn bị môi trường dev. Đây là thiết kế, chưa tri�
 |---|---|---|
 | AWS IoT Core | 3 Things/certificates/policies: `pi-01`, `gate-01`, `slots-01` | MQTT/TLS và phân quyền topic |
 | IoT Rules | Rule riêng cho vision, slots, gate/display telemetry, status | Đưa sự kiện đến Lambda xử lý |
-| AWS Lambda | Handler sự kiện, HTTP API, purge định danh | Gán ô, phiên đỗ, giá, QR, SES |
+| AWS Lambda | Handler sự kiện, HTTP API, giám sát/purge | Phiên đỗ (cho vào/cho ra), giá, QR, SES, danh sách xe cho Pi |
 | Amazon API Gateway HTTP API | Route public/guest/kiosk/admin | HTTPS cho web |
 | Amazon DynamoDB | Slots, Sessions, ActivePlates, ProcessedMessages, DeviceStatus, PricingConfig | Dữ liệu hiện thời và nghiệp vụ |
 | Amazon SES | Sender identity, email template | Gửi chỉ dẫn theo lượt |
@@ -18,7 +18,7 @@ Tài liệu chuẩn bị môi trường dev. Đây là thiết kế, chưa tri�
 | Amazon CloudWatch | Logs/alarms | Lỗi, thiết bị offline, SES failure |
 | AWS Budgets | Email cảnh báo chi phí | Kiểm soát chi phí đồ án |
 
-Không cần RDS, SQS, Rekognition hoặc SNS SMS cho MVP. Nếu Pi OCR không đủ tốt, đánh giá Rekognition như một phương án sau với chi phí và thay đổi luồng ảnh rõ ràng.
+Không cần RDS, SQS, Rekognition hoặc SNS SMS cho MVP. Bản demo không đọc biển; nếu sau này cần đọc biển thật (OCR trên Pi chưa đủ tốt), đánh giá Rekognition như một phương án với chi phí và thay đổi luồng ảnh rõ ràng.
 
 ## 2. Thứ tự triển khai
 

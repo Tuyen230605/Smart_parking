@@ -118,6 +118,10 @@ class Link {
       return false;
     }
     if (!mqtt_.connected()) {
+      if (wasConnected_) {
+        wasConnected_ = false;
+        Serial.printf("[mqtt] mất kết nối: lỗi %d / rc %d\n", mqtt_.lastError(), mqtt_.returnCode());
+      }
       if (millis() - lastTry_ < retryMs_) return false;
       lastTry_ = millis();
       // Last Will: AWS IoT phát OFFLINE nếu mất kết nối đột ngột.
@@ -136,7 +140,11 @@ class Link {
       }
       retryMs_ = 2000;
       Serial.println("[mqtt] ✓ đã kết nối AWS IoT");
-      for (auto &t : subs_) mqtt_.subscribe(t.c_str(), 1);
+      wasConnected_ = true;
+      // Chỉ các topic đã đăng ký: subscribe topic rỗng làm AWS IoT ngắt kết nối (CLIENT_ERROR).
+      for (int i = 0; i < nSubs_; i++)
+        if (!mqtt_.subscribe(subs_[i].c_str(), 1))
+          Serial.printf("[mqtt] subscribe %s lỗi %d\n", subs_[i].c_str(), mqtt_.lastError());
       justConnected = true;
       status();
       lastStatus_ = millis();
@@ -187,6 +195,7 @@ class Link {
   String statusTopic_;
   String subs_[4];
   int nSubs_ = 0;
+  bool wasConnected_ = false;
   char willBuf_[320];
   uint32_t lastTry_ = 0, retryMs_ = 2000, lastStatus_ = 0, lastLog_ = 0;
 };

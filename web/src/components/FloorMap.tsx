@@ -1,4 +1,4 @@
-// Sơ đồ một tầng 3×3 theo docs/parking-layout.md. Dùng chung cho trang khách (tô ô được gán)
+// Sơ đồ một tầng 3×3 theo docs/parking-layout.md. Dùng chung cho trang khách (tô ô gợi ý)
 // và trang sơ đồ công khai (tô theo trạng thái). Người 3 sở hữu component này.
 import type { Slot } from "../api";
 

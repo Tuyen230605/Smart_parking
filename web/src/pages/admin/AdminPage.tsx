@@ -1,7 +1,7 @@
 // Trang quản trị: tổng quan + cảnh báo, thiết bị + điều khiển cần, phiên đỗ + thao tác, bảng giá.
 import { useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
-import { api, ApiError, type AdminSession, type DeviceInfo, type Pricing, type ResolveAction } from "../../api";
+import { api, ApiError, type AdminDashboard, type AdminSession, type DeviceInfo, type LotCar, type Pricing, type ResolveAction } from "../../api";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useLoad } from "../../components/useLoad";
 
@@ -65,11 +65,12 @@ function Overview() {
       {d && (
         <div className="stats">
           <div className="card stat-available"><b>{d.available}</b> trống</div>
-          <div className="card stat-reserved"><b>{d.reserved}</b> đang giữ</div>
+          <div className="card stat-reserved"><b>{d.lot?.in_lot.length ?? 0}</b> xe trong bãi</div>
           <div className="card stat-occupied"><b>{d.occupied}</b> có xe</div>
           <div className="card stat-unknown"><b>{d.unknown}</b> không rõ</div>
         </div>
       )}
+      {d?.lot && <LotList lot={d.lot} />}
       <section className="card">
         <h2>Cảnh báo {d && d.alerts.length > 0 && <span className="badge">{d.alerts.length}</span>}</h2>
         {d?.alerts.length === 0 && <p className="muted">Không có cảnh báo mới.</p>}
@@ -90,6 +91,23 @@ function Overview() {
         </div>
       </section>
     </>
+  );
+}
+
+/** Danh sách xe trong bãi lấy từ phiên đỗ (cùng nguồn với trang camera trên Pi). */
+function LotList({ lot }: { lot: NonNullable<AdminDashboard["lot"]> }) {
+  const plates = (cars: LotCar[]) => cars.map((c) => c.plate ?? c.session_ref).join(", ") || "—";
+  return (
+    <section className="card">
+      <h2>Xe trong bãi <span className="badge">{lot.in_lot.length}</span></h2>
+      <p className="lot-plates">{plates(lot.in_lot)}</p>
+      {lot.pending_entry.length > 0 && (
+        <p>Chờ cho vào: <b>{plates(lot.pending_entry)}</b> → <NavLink to="/admin/sessions">Phiên đỗ</NavLink></p>
+      )}
+      {lot.pending_exit.length > 0 && (
+        <p>Chờ cho ra: <b>{plates(lot.pending_exit)}</b> → <NavLink to="/admin/sessions">Phiên đỗ</NavLink></p>
+      )}
+    </section>
   );
 }
 
@@ -122,7 +140,7 @@ function Device({ dev, reload }: { dev: DeviceInfo; reload: () => void }) {
 // ── phiên đỗ ────────────────────────────────────────────────────────────────
 
 const STATE_LABEL: Record<string, string> = {
-  MANUAL_REVIEW: "Chờ duyệt", RESERVED: "Đang giữ ô", PARKED: "Đang đỗ", EXIT_REQUESTED: "Yêu cầu ra",
+  ENTRY_PENDING: "Chờ cho vào", MANUAL_REVIEW: "Chờ duyệt", RESERVED: "Trong bãi", PARKED: "Trong bãi", EXIT_REQUESTED: "Chờ cho ra",
   EXIT_OPENED: "Đã mở cần ra", CLOSED: "Đã đóng", EXPIRED: "Hết hạn giữ ô", REJECTED: "Từ chối", RESOLVED: "Đã gộp",
 };
 
@@ -136,8 +154,8 @@ function Sessions() {
           Lọc
           <select value={filter} onChange={(e) => setFilter(e.target.value)}>
             <option value="OPEN">Đang mở</option>
-            <option value="MANUAL_REVIEW">Chờ duyệt</option>
-            <option value="EXIT_REQUESTED">Chờ thu tiền</option>
+            <option value="ENTRY_PENDING">Chờ cho vào</option>
+            <option value="EXIT_REQUESTED">Chờ cho ra</option>
             <option value="CLOSED">Đã đóng</option>
             <option value="">Tất cả</option>
           </select>
@@ -167,13 +185,23 @@ function SessionCard({ s, reload }: { s: AdminSession; reload: () => void }) {
         {s.email_status && <span className="muted">email: {s.email_status}</span>}
       </div>
 
+      {s.state === "ENTRY_PENDING" && (
+        <div className="actions entry-pending">
+          <p>Camera thấy xe <b className="fee">{s.plate_text ?? "—"}</b> ở làn VÀO</p>
+          <div className="row">
+            <button disabled={busy || !s.plate_text} onClick={() => resolve("ENTRY")}>Cho vào (mở cần vào)</button>
+            <button className="secondary" disabled={busy} onClick={() => resolve("REJECT")}>Không cho vào</button>
+          </div>
+        </div>
+      )}
+
       {s.state === "MANUAL_REVIEW" && (
         <div className="actions">
           <p>Làn <b>{s.review_lane}</b> · lý do <code>{s.review_reason}</code></p>
           <input value={plate} onChange={(e) => setPlate(e.target.value)} placeholder="Biển số đúng, ví dụ 51A-12345" />
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ghi chú (lưu vết)" />
           <div className="row">
-            <button disabled={busy || !plate} onClick={() => resolve("ENTRY")}>Cho VÀO (gán ô, mở cần vào)</button>
+            <button disabled={busy || !plate} onClick={() => resolve("ENTRY")}>Cho VÀO (mở cần vào)</button>
             <button disabled={busy || !plate} onClick={() => resolve("EXIT")}>Xử lý RA theo biển số</button>
             <button className="secondary" disabled={busy} onClick={() => resolve("REJECT")}>Bỏ qua</button>
           </div>
@@ -189,18 +217,19 @@ function SessionCard({ s, reload }: { s: AdminSession; reload: () => void }) {
       )}
 
       {s.state === "EXIT_REQUESTED" && (
-        <div className="actions">
-          <p>Phí đã khóa: <b className="fee">{vnd(s.fee_vnd)}</b> · {s.payment_status}</p>
+        <div className="actions exit-pending">
+          <p>Xe đang chờ ở làn RA · Phí: <b className="fee">{vnd(s.fee_vnd)}</b>
+            {s.payment_status === "NO_CHARGE" && <span className="muted"> (miễn phí, dưới thời gian miễn phí)</span>}</p>
           {s.payment_status === "PENDING" ? (
             <div className="row">
               <button disabled={busy} onClick={() => run(() => api.recordPayment(s.session_id, "PAID_CASH", s.fee_vnd ?? 0, "Đã thu tại cổng"))}>
-                Đã thu tiền mặt → mở cần ra
+                Đã thu {vnd(s.fee_vnd)} → cho ra (mở cần)
               </button>
               <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Lý do miễn phí" />
               <button className="secondary" disabled={busy || !note} onClick={() => run(() => api.recordPayment(s.session_id, "WAIVED", null, note))}>Miễn phí</button>
             </div>
           ) : (
-            <button disabled={busy} onClick={() => run(() => api.openExit(s.session_id))}>Mở cần ra</button>
+            <button disabled={busy} onClick={() => run(() => api.openExit(s.session_id))}>Cho ra (mở cần)</button>
           )}
         </div>
       )}

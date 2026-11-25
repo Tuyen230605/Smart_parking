@@ -1,9 +1,10 @@
-// Màn hình kiosk tại cổng vào: QR lớn của phiên mới nhất + ô + lộ trình; tự ẩn khi QR hết hạn.
+// Màn hình kiosk tại cổng vào: QR lớn của phiên mới nhất + gợi ý ô trống gần nhất; tự ẩn khi QR hết hạn.
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import { api, type ActiveClaim } from "../../api";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useLoad } from "../../components/useLoad";
+import { Guide, RouteMaps } from "../guest/ClaimPage";
 
 export function KioskPage() {
   return (
@@ -22,14 +23,14 @@ function Kiosk() {
   return (
     <main className="page kiosk">
       <div className="kiosk-head">
-        <h1>Quét mã để xem đường đến ô đỗ</h1>
+        <h1>Quét mã để xem chỗ trống</h1>
         <button className="secondary" onClick={() => document.documentElement.requestFullscreen?.()}>Toàn màn hình</button>
       </div>
       {error && <div className="card error">{error.message}</div>}
-      {latest ? <BigClaim claim={latest} now={now} /> : <div className="card kiosk-idle">Mời xe tiếp theo quẹt thẻ xanh ở làn vào</div>}
+      {latest ? <BigClaim claim={latest} now={now} /> : <div className="card kiosk-idle">Mời xe tiếp theo vào làn</div>}
       {others.length > 0 && (
         <p className="muted">
-          Lượt khác còn hiệu lực: {others.map((c) => `${c.session_ref} → ${c.slot_id}`).join(" · ")}
+          Lượt khác còn hiệu lực: {others.map((c) => c.session_ref).join(" · ")}
         </p>
       )}
     </main>
@@ -37,6 +38,7 @@ function Kiosk() {
 }
 
 function BigClaim({ claim, now }: { claim: ActiveClaim; now: number }) {
+  const layout = useLoad(() => api.getLayout(), [], 5_000);
   const [svg, setSvg] = useState("");
   useEffect(() => {
     QRCode.toString(claim.claim_url, { type: "svg", margin: 1, errorCorrectionLevel: "M" }).then(setSvg);
@@ -48,10 +50,8 @@ function BigClaim({ claim, now }: { claim: ActiveClaim; now: number }) {
       <div className="qr" dangerouslySetInnerHTML={{ __html: svg }} aria-label="Mã QR lượt gửi xe" />
       <div>
         <p className="muted">Mã lượt {claim.session_ref}</p>
-        <div className="slot-id">{claim.slot_id}</div>
-        <ol className="route">
-          {(claim.route_steps ?? []).map((s) => <li key={s}>{s}</li>)}
-        </ol>
+        <Guide claim={claim} />
+        <RouteMaps slots={layout.data?.slots ?? []} target={claim.slot_id} />
         <p className="muted">Quét bằng camera điện thoại · nhận chỉ dẫn qua email nếu muốn · còn {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}</p>
       </div>
     </section>

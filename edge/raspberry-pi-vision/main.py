@@ -1,23 +1,31 @@
-"""Vòng lặp pi-01: camera → màu thẻ theo làn → OCR biển số → `vehicle_detected`.
+"""Vòng lặp pi-01 (bản demo đơn giản): camera → có vật trong làn → `vehicle_detected` (không biển số).
+
+Không cần thẻ màu hay biển in: đưa tay (hoặc xe mô hình) vào khung ENTRY = một xe vào, khung EXIT = một xe ra.
+Backend đánh biển demo (11111, 22222…), chờ quản trị bấm Cho vào/Cho ra rồi gửi lại danh sách xe để hiển thị.
 
     python main.py                                  # chạy theo config.toml
-    python main.py --source fixtures/entry.jpg --dry-run
+    python main.py --source 0 --dry-run             # webcam laptop, không gửi MQTT
 """
 import argparse
 import logging
 import signal
+import threading
 import time
 
 import cv2
 
 from camera import open_camera
-from detector import CardDetector, LaneTracker, PlateReader, crop, roi_to_pixels
+from cars import LotView
+from detector import crop, roi_to_pixels
+from presence import LanePresence, PresenceConfig
 from preview import PreviewServer
 from publisher import Publisher
 from settings import load_config
 
 log = logging.getLogger("pi-vision")
-BOX_COLORS = {"GREEN": (0, 200, 0), "RED": (0, 0, 230), None: (200, 200, 200)}
+# Backend chỉ nhận ENTRY+GREEN và EXIT+RED (hợp đồng MQTT v1) — giữ nguyên để không phải đổi backend.
+LANE_COLOR = {"ENTRY": "GREEN", "EXIT": "RED"}
+BOX_COLORS = {"TRONG": (200, 200, 200), "THAY VAT": (0, 200, 255), "DA BAO": (0, 200, 0)}
 
 
 def parse_args():
@@ -30,22 +38,21 @@ def parse_args():
     return p.parse_args()
 
 
-def annotate(frame, lanes, states, last_event):
+def annotate(frame, lanes, detectors, lot, last_event):
     out = frame.copy()
     h, w = out.shape[:2]
     thickness = max(2, w // 500)
+    scale = w / 1600
     for lane_id, lane in lanes.items():
-        color, ratios, tracker = states[lane_id]
+        det = detectors[lane_id]
         p0, p1 = roi_to_pixels(lane["roi"], w, h)
-        cv2.rectangle(out, p0, p1, BOX_COLORS[color], thickness)
-        if lane.get("plate_roi"):
-            q0, q1 = roi_to_pixels(lane["plate_roi"], w, h)
-            cv2.rectangle(out, q0, q1, (255, 200, 0), thickness)
-        ratio_text = " ".join(f"{k[0]}={v:.2f}" for k, v in ratios.items())
-        label = f"{lane_id} {tracker.state} {ratio_text}"
-        cv2.putText(out, label, (p0[0] + 10, p0[1] + 40), cv2.FONT_HERSHEY_SIMPLEX, w / 1600, (255, 255, 255), thickness)
+        cv2.rectangle(out, p0, p1, BOX_COLORS[det.state], thickness)
+        label = f"{lane_id} {det.state} {det.ratio:.0%}"
+        cv2.putText(out, label, (p0[0] + 10, p0[1] + 50), cv2.FONT_HERSHEY_SIMPLEX, scale * 1.2, (255, 255, 255),
+                    thickness)
+    cv2.putText(out, lot.summary(), (10, h - 70), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 0), thickness)
     if last_event:
-        cv2.putText(out, last_event, (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, w / 1600, (0, 255, 255), thickness)
+        cv2.putText(out, last_event, (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 255, 255), thickness)
     return out
 
 
@@ -56,23 +63,45 @@ def main():
     if args.source:
         cfg["camera"]["source"] = args.source
 
-    det = cfg["detection"]
     lanes = cfg["lanes"]
+    presence_cfg = PresenceConfig(**cfg.get("presence", {}))
+    detectors = {lane_id: LanePresence(lane_id, presence_cfg) for lane_id in lanes}
+    lot = LotView()
+    publisher = Publisher(cfg["device"], cfg["mqtt"], dry_run=args.dry_run, on_lot=lot.update)
     camera = open_camera(cfg["camera"])
-    cards = CardDetector(cfg["colors"], det["min_card_ratio"])
-    reader = PlateReader()
-    publisher = Publisher(cfg["device"], cfg["mqtt"], dry_run=args.dry_run)
+    events_lock = threading.Lock()
+    last_event = ""
+
+    def fire(lane_id):
+        """Báo có xe ở làn. Gọi từ vòng camera hoặc nút trên trang preview."""
+        nonlocal last_event
+        with events_lock:
+            publisher.vehicle_detected(lane_id, LANE_COLOR[lane_id], None, 0.0)
+            msg = f"Thay xe o lan {'VAO' if lane_id == 'ENTRY' else 'RA'} - cho quan tri cho phep tren web"
+            log.info(msg)
+            last_event = msg
+            return msg
+
+    def cars_view(message=None):
+        return {**lot.snapshot(), "message": message}
+
+    def trigger(q):
+        lane = q.get("lane", "").upper()
+        if lane not in LANE_COLOR:
+            return cars_view("lane phải là ENTRY hoặc EXIT")
+        return cars_view(fire(lane))
+
+    def background(_q):
+        for det in detectors.values():
+            det.reset_background()
+        return cars_view("Đã chụp lại nền (bỏ tay ra khỏi khung trước khi bấm)")
+
     preview = None
     if cfg["preview"]["enabled"] and not args.no_preview:
-        preview = PreviewServer(cfg["preview"]["port"])
+        preview = PreviewServer(cfg["preview"]["port"], actions={
+            "/cars": lambda _q: cars_view(), "/trigger": trigger, "/background": background,
+        })
         log.info("Preview: http://<ip-pi>:%s", cfg["preview"]["port"])
-    trackers = {
-        lane_id: LaneTracker(
-            lane_id, det["stable_frames"], det["clear_frames"], det["ocr_attempts"],
-            det["dedupe_window_s"], det["plate_confidence_threshold"],
-        )
-        for lane_id in lanes
-    }
 
     running = True
 
@@ -86,7 +115,6 @@ def main():
     frame_interval = 1 / cfg["camera"]["fps"]
     status_interval = cfg["mqtt"]["status_interval_s"]
     next_status = time.monotonic() + status_interval
-    last_event = ""
     frames = 0
     try:
         while running:
@@ -97,23 +125,12 @@ def main():
                 time.sleep(0.5)
                 continue
 
-            states = {}
             for lane_id, lane in lanes.items():
-                color, ratios = cards.detect(crop(frame, lane["roi"]))
-                tracker = trackers[lane_id]
-                if tracker.update(color):
-                    plate_img = crop(frame, lane.get("plate_roi") or lane["roi"])
-                    detection = tracker.add_reading(reader.read(plate_img), started)
-                    if detection:
-                        publisher.vehicle_detected(
-                            detection.lane_id, detection.card_color,
-                            detection.plate_text, detection.plate_confidence,
-                        )
-                        last_event = f"{detection.lane_id} {detection.card_color} {detection.plate_text} {detection.plate_confidence}"
-                states[lane_id] = (color, ratios, tracker)
+                if detectors[lane_id].update(crop(frame, lane["roi"]), started):
+                    fire(lane_id)
 
             if preview:
-                preview.update(frame, annotate(frame, lanes, states, last_event), cfg["preview"]["width"])
+                preview.update(frame, annotate(frame, lanes, detectors, lot, last_event), cfg["preview"]["width"])
             if started >= next_status:
                 publisher.status()
                 next_status = started + status_interval

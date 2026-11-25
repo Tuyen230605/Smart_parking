@@ -5,6 +5,7 @@ JWT Cognito đã được API Gateway kiểm tra cho route kiosk/admin; ở đâ
 import base64
 import json
 import re
+import secrets
 
 import core
 import logic
@@ -80,13 +81,27 @@ def _session_from_token(token):
     return s
 
 
+def _guide(hint=None):
+    """Gợi ý ô trống gần nhất LÚC HỎI (không gán ô cho phiên): slot_id null nếu không biết/không còn."""
+    hint = hint or logic.suggestion()
+    sid = hint["slot_id"]
+    return {"slot_id": sid, "route_steps": core.route_steps(sid) if sid else [], "free_count": hint["free_count"]}
+
+
+def _linked(s):
+    key = s.get("plate_normalized")
+    return core.table("plate_emails").get_item(Key={"plate_normalized": key}).get("Item") if key else None
+
+
 def _claim_view(s):
+    link = _linked(s)
     return {
         "session_ref": s["session_ref"],
-        "slot_id": s["slot_id"],
-        "route_steps": core.route_steps(s["slot_id"]),
+        **_guide(),
         "claim_expires_at": s["claim_expires_at"],
         "email_submitted": bool(s.get("email_status")),
+        "email_auto": bool(s.get("email_auto")),
+        "linked_email": core.mask_email(link["email"]) if link else None,
     }
 
 
@@ -124,7 +139,16 @@ def post_claim_email(event, params, body):
             raise BusinessError(409, "EMAIL_ALREADY_SENT", "Phiên này đã gửi email") from err
         raise
     try:
-        message_id = services.send_guide_email(email, s)
+        chosen = body.get("slot_id") if body.get("slot_id") in core.SLOT_IDS else None
+        unsub = None
+        if body.get("remember") is True and s.get("plate_normalized"):
+            # Khách tự chọn: ghi nhớ email cho biển số, lần sau xe vào tự gửi chỉ dẫn.
+            nonce = secrets.token_urlsafe(12)
+            core.table("plate_emails").put_item(Item={
+                "plate_normalized": s["plate_normalized"], "email": email, "nonce": nonce,
+                "linked_at": core.iso(at), "linked_session_ref": s["session_ref"]})
+            unsub = services.unsubscribe_url(s["plate_normalized"], nonce)
+        message_id = services.send_guide_email(email, s, chosen, unsubscribe=unsub)
         status, extra = "ACCEPTED_BY_SES", {":m": message_id or "-"}
         expr = "SET email_status = :st, ses_message_id = :m"
     except Exception as err:  # noqa: BLE001 — SES lỗi không rollback phiên (SIM-14)
@@ -137,6 +161,28 @@ def post_claim_email(event, params, body):
     return 202, {"email_status": "QUEUED"}
 
 
+def post_forget_email(event, params, body):
+    """Bỏ liên kết email với biển số của lượt này (từ trang QR)."""
+    s = _session_from_token(params["token"])
+    if s.get("plate_normalized"):
+        core.table("plate_emails").delete_item(Key={"plate_normalized": s["plate_normalized"]})
+    return 200, {"linked_email": None}
+
+
+def post_unsubscribe(event, params, body):
+    """Link "Hủy liên kết" trong email tự gửi."""
+    data = services.read_unsub_token(params["token"])
+    if not data:
+        raise BusinessError(404, "NOT_FOUND", "Link hủy không hợp lệ")
+    try:
+        core.table("plate_emails").delete_item(Key={"plate_normalized": data["p"]}, ConditionExpression="nonce = :n",
+                                               ExpressionAttributeValues={":n": data["n"]})
+    except Exception as err:  # noqa: BLE001
+        if not core.is_conditional_failure(err):
+            raise  # đã hủy trước đó hoặc đã liên kết lại email khác: coi như xong
+    return 200, {"ok": True}
+
+
 # ── kiosk ──────────────────────────────────────────────────────────────────
 
 
@@ -146,10 +192,10 @@ def get_active_claims(event, params, body):
                              ExpressionAttributeNames={"#s": "state"},
                              ExpressionAttributeValues={":r": "RESERVED", ":p": "PARKED"})
     live = sorted((s for s in sessions if _claim_live(s)), key=lambda s: s["checkin_at"], reverse=True)
+    guide = _guide() if live else None
     return 200, [{
-        "session_ref": s["session_ref"], "slot_id": s["slot_id"], "claim_url": services.claim_url(s),
-        "claim_expires_at": s["claim_expires_at"], "route_steps": core.route_steps(s["slot_id"]),
-        "checkin_at": s["checkin_at"],
+        "session_ref": s["session_ref"], "claim_url": services.claim_url(s),
+        "claim_expires_at": s["claim_expires_at"], "checkin_at": s["checkin_at"], **guide,
     } for s in live]
 
 
@@ -188,6 +234,7 @@ def get_dashboard(event, params, body):
         "unknown": count("UNKNOWN") + (len(core.SLOT_IDS) - len(slots)), "out_of_service": count("OUT_OF_SERVICE"),
         "offline_devices": [d["device_id"] for d in _devices() if d["state"] == "OFFLINE"],
         "alerts": _alerts(),
+        "lot": logic.lot_state(),
     }
 
 
@@ -288,6 +335,8 @@ ROUTES = {
     "GET /v1/public/layout": get_layout,
     "GET /v1/public/claims/{token}": get_claim,
     "POST /v1/public/claims/{token}/email": post_claim_email,
+    "POST /v1/public/claims/{token}/forget-email": post_forget_email,
+    "POST /v1/public/unsubscribe/{token}": post_unsubscribe,
     "GET /v1/kiosk/active-claims": get_active_claims,
     "GET /v1/admin/dashboard": get_dashboard,
     "GET /v1/admin/sessions": list_sessions,

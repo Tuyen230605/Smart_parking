@@ -1,4 +1,4 @@
-"""Mock ESP32 `slots-01`: 1 "cảm biến" F1-A1 + 17 "nút" — thay board thật cho tới khi nạp firmware.
+"""Mock ESP32 `slots-01`: 18 "nút" — thay board thật cho tới khi nạp firmware.
 
     python simulation/mock_slots.py            # nối AWS IoT bằng cert slots-01
     python simulation/mock_slots.py --local    # Mosquitto local
@@ -26,8 +26,8 @@ STATE_FILE = Path(__file__).with_name(".slots-state.json")
 log = logging.getLogger("mock")
 
 
-def source(slot_id):
-    return "SENSOR" if slot_id == "F1-A1" else "BUTTON"
+def source(slot_id):  # noqa: ARG001
+    return "BUTTON"  # cả 18 ô là nút bấm
 
 
 def main():

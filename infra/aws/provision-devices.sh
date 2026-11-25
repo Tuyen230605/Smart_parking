@@ -19,7 +19,9 @@ policy_doc() {  # quyền tối thiểu theo docs/mqtt-contract.md
     pi-01) cat <<JSON
 {"Version":"2012-10-17","Statement":[
  {"Effect":"Allow","Action":"iot:Connect","Resource":"$ARN:client/pi-01"},
- {"Effect":"Allow","Action":"iot:Publish","Resource":["$ARN:topic/$T/vision/pi-01/events","$ARN:topic/$T/devices/pi-01/status"]}]}
+ {"Effect":"Allow","Action":"iot:Publish","Resource":["$ARN:topic/$T/vision/pi-01/events","$ARN:topic/$T/devices/pi-01/status"]},
+ {"Effect":"Allow","Action":"iot:Subscribe","Resource":"$ARN:topicfilter/$T/vision/pi-01/lot"},
+ {"Effect":"Allow","Action":"iot:Receive","Resource":"$ARN:topic/$T/vision/pi-01/lot"}]}
 JSON
     ;;
     gate-01) cat <<JSON

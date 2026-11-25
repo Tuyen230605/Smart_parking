@@ -15,8 +15,9 @@
 | `parking/v1/site-01/displays/gate-01/commands` | Backend | ESP gate/OLED | `display_command` |
 | `parking/v1/site-01/displays/gate-01/telemetry` | ESP gate | IoT Rule → backend | `display_telemetry` |
 | `parking/v1/site-01/devices/{device_id}/status` | Đúng thiết bị ID đó | IoT Rule → backend | `device_status` |
+| `parking/v1/site-01/vision/pi-01/lot` | Backend | Pi (trang camera) | `lot_state` |
 
-Không publish biển số lên topic OLED, cảm biến hay public web. Admin xem biển số qua API có xác thực.
+Không publish biển số lên topic cảm biến hay public web. Admin xem biển số qua API có xác thực. Ngoại lệ demo: `lot_state` gửi **biển số demo** (`11111`…) xuống Pi để trang camera trong LAN hiển thị; OLED hiện biển demo khi xe chờ vào.
 
 ## 2. Quy tắc chung
 
@@ -25,7 +26,7 @@ Không publish biển số lên topic OLED, cảm biến hay public web. Admin x
 - Device event có `boot_id` (UUID mỗi lần khởi động) + `seq` tăng trong phiên khởi động. `event_id` là UUID toàn cục; backend dedupe theo `event_id`.
 - ESP bỏ lệnh trùng `command_id`, lệnh quá `expires_at`, sai `target` hoặc `schema_version`; trả telemetry có `error_code`.
 - Command có thời hạn tối đa 5 giây từ lúc phát, không dùng lệnh cũ sau reconnect. ESP tự đưa servo về vị trí đóng sau thời gian demo đã cấu hình và gửi trạng thái.
-- Pi gửi một event sau khi màu/biển số ổn định nhiều frame; cùng xe/làn không phát lại trong cửa sổ 5 giây. Backend vẫn phải dedupe.
+- Pi gửi một event khi vật nằm trong vùng làn đủ `stable_frames` frame; phải rời làn `clear_frames` frame mới nhận lượt mới, tối thiểu `cooldown_s` giữa hai lượt. Backend vẫn phải dedupe.
 - MQTT không vận chuyển ảnh nhị phân, email, token QR hoặc thông tin thanh toán.
 - Mỗi thiết bị dùng Thing/certificate/policy riêng chỉ cho publish/sub topic trong bảng; backend dùng IAM role.
 
@@ -47,7 +48,7 @@ Không publish biển số lên topic OLED, cảm biến hay public web. Admin x
 }
 ```
 
-`lane_id`: `ENTRY` hoặc `EXIT`, lấy từ ROI camera. `card_color`: `GREEN`/`RED`. Hợp lệ khi `ENTRY+GREEN` hoặc `EXIT+RED`; cặp khác chuyển `MANUAL_REVIEW`. `plate_text` có thể là `null` khi OCR thất bại. Ngưỡng confidence khởi điểm 0,85, phải hiệu chỉnh trên bộ ảnh của nhóm; không xem là độ chính xác được bảo đảm.
+`lane_id`: `ENTRY` hoặc `EXIT`, lấy từ ROI camera. `card_color`: `GREEN`/`RED`; Pi demo luôn gửi `ENTRY+GREEN` / `EXIT+RED` (cặp khác bị bỏ qua). Pi demo **không đọc biển**: `plate_text = null`, `plate_confidence = 0`. Khi đó backend tự đánh biển demo (xe vào: số nhỏ nhất chưa dùng `11111`, `22222`…; xe ra: xe số lớn nhất đang đỗ). Nếu `plate_text` có và `plate_confidence ≥ 0,85` thì backend dùng biển đó. Mọi lượt vào/ra chờ quản trị cho phép trên web; backend không tự mở cần khi nhận event.
 
 ## 4. Trạng thái ô từ ESP slots
 
@@ -64,11 +65,11 @@ Không publish biển số lên topic OLED, cảm biến hay public web. Admin x
   "occurred_at": "2026-10-05T09:01:00Z",
   "slot_id": "F1-A1",
   "occupied": true,
-  "source": "SENSOR"
+  "source": "BUTTON"
 }
 ```
 
-`source` là `SENSOR` duy nhất cho F1-A1, `BUTTON` cho 17 ô khác. `occupied` là tín hiệu hiện trường; backend tự chuyển trạng thái nghiệp vụ `RESERVED/OCCUPIED/AVAILABLE`. Cảm biến thật dùng lọc nhiều mẫu; nút dùng debounce và đảo trạng thái trên một lần nhấn.
+`source` là `BUTTON` cho cả 18 ô (sa bàn không dùng cảm biến thật; giá trị `SENSOR` để dành cho sau này). `occupied` là tín hiệu hiện trường; backend chuyển thành trạng thái ô `OCCUPIED/AVAILABLE` để chỉ chỗ trống (không giữ ô cho phiên). Nút dùng debounce và đảo trạng thái trên một lần nhấn.
 
 ### Snapshot toàn bộ ô
 
@@ -82,7 +83,7 @@ Không publish biển số lên topic OLED, cảm biến hay public web. Admin x
   "seq": 102,
   "occurred_at": "2026-10-05T09:01:30Z",
   "slots": [
-    {"slot_id": "F1-A1", "occupied": true, "source": "SENSOR"},
+    {"slot_id": "F1-A1", "occupied": true, "source": "BUTTON"},
     {"slot_id": "F1-A2", "occupied": false, "source": "BUTTON"}
   ]
 }
@@ -106,7 +107,7 @@ Ví dụ rút gọn còn 2 phần tử; message thực tế **phải chứa đ�
 }
 ```
 
-`gate` là `ENTRY` hoặc `EXIT`. `action` trong MVP là `OPEN` hoặc `CLOSE`. ESP điều khiển đúng servo của `gate`; không dùng “cần đang rảnh” để chọn servo. Telemetry:
+`gate` là `ENTRY` hoặc `EXIT`. `action` trong MVP là `OPEN` hoặc `CLOSE`. ESP điều khiển đúng hướng của `gate`. Mô hình hiện tại có một servo: `ENTRY` quay trái, `EXIT` quay phải, đóng thì về giữa. Khi đang mở một làn mà nhận lệnh mở làn kia, làn cũ báo `CLOSED` trước. Telemetry:
 
 ```json
 {
@@ -139,6 +140,8 @@ Ví dụ rút gọn còn 2 phần tử; message thực tế **phải chứa đ�
 }
 ```
 
+Khi xe được cho vào, `lines` là ô **gợi ý** (không gán): `["VAO: goi y F1-A2", "Tang 1 hang A o 2", "Con 12 cho trong"]`; board ô offline thì `["MOI VAO", "Tu tim cho trong", ""]`. Khi xe chờ vào: `["XE 11111", "Cho nhan vien", "cho phep vao"]`.
+
 `screen`: `ENTRY_ROUTE`, `EXIT_FEE`, `LOT_FULL`, `ERROR`, `IDLE`. `lines` tối đa 3 dòng × 20 ký tự ASCII/không dấu cho OLED mô hình; frontend/email có tiếng Việt đầy đủ. ACK trên topic display telemetry chứa `command_id`, `state=SHOWN|ERROR`, `occurred_at`. Hai lệnh display và gate có ID riêng, handler riêng. Nếu đến đồng thời, `ERROR` ưu tiên, sau đó `EXIT_FEE`, rồi `ENTRY_ROUTE`; kiosk vẫn hiển thị QR từng phiên.
 
 ## 7. Device status
@@ -147,4 +150,21 @@ Mỗi thiết bị publish `device_status` mỗi 30 giây và sau reconnect, g�
 
 ## 8. Tương ứng với API và database
 
-Pi/ESP không lưu email, QR hoặc DynamoDB key; ESP gate chỉ hiển thị chữ/phí do backend gửi, không tự tính tiền. Backend chuyển `vehicle_detected` thành phiên, gửi gate/display command, đưa dữ liệu phiên cho web qua REST. `slot_changed` và `slots_snapshot` chỉ cập nhật cảm biến; không được tự ghi đè `RESERVED` của backend.
+## 8. Danh sách xe trong bãi (backend → Pi)
+
+```json
+{
+  "schema_version": 1,
+  "message_type": "lot_state",
+  "occurred_at": "2026-11-25T09:45:41.753Z",
+  "in_lot": ["11111", "22222"],
+  "pending_entry": ["33333"],
+  "pending_exit": []
+}
+```
+
+Backend publish (QoS 1, không retain) mỗi khi danh sách đổi (chờ vào, cho vào, từ chối, chờ ra, cho ra) và mỗi phút từ job giám sát để Pi mới khởi động có dữ liệu. Policy `pi-01` có `iot:Subscribe`/`iot:Receive` riêng topic này. IoT Rule bỏ `message_type = 'lot_state'` để không quay lại Lambda.
+
+## 9. Tương ứng với API và database
+
+Pi/ESP không lưu email, QR hoặc DynamoDB key; ESP gate chỉ hiển thị chữ/phí do backend gửi, không tự tính tiền. Backend chuyển `vehicle_detected` thành phiên chờ quản trị, gửi gate/display command khi quản trị cho phép, đưa dữ liệu phiên cho web qua REST. `slot_changed` và `slots_snapshot` chỉ cập nhật trạng thái ô để chỉ chỗ trống; không ảnh hưởng phiên.

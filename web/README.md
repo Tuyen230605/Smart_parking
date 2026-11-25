@@ -2,9 +2,9 @@
 
 Một ứng dụng responsive, ba chế độ:
 
-- Public/guest: sơ đồ 18 ô; trang QR phiên cho biết ô/đường và form email tùy chọn.
-- Kiosk tại cổng: hiển thị QR phiên đang vào trên laptop/tablet, không hiện dữ liệu riêng của xe khác.
-- Admin: đăng nhập Cognito, theo dõi thiết bị/phiên, xử lý OCR, phí và xác nhận xe đã ra.
+- Public/guest: sơ đồ 18 ô; trang QR phiên gợi ý ô trống, cho khách chạm chọn ô và vẽ đường đi từ cổng vào (`components/RouteMap.tsx`), form email (tùy chọn ghi nhớ theo biển số); `/huy-email/:token` hủy liên kết.
+- Kiosk tại cổng: hiển thị QR phiên vừa được cho vào kèm bản đồ đường đi, không hiện dữ liệu riêng của xe khác.
+- Admin: đăng nhập Cognito; Tổng quan có danh sách xe trong bãi/chờ vào/chờ ra; Phiên đỗ có nút **Cho vào** và **Cho ra** (thu tiền) để mở cần; thiết bị, bảng giá.
 
 Web dùng [REST API](../docs/api-contract.md); không nhúng AWS secret hoặc subscribe IoT Core trực tiếp.
 

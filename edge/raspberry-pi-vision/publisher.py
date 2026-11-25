@@ -13,12 +13,14 @@ def utc_now():
 
 
 class Publisher:
-    def __init__(self, device_cfg, mqtt_cfg, dry_run=False):
+    def __init__(self, device_cfg, mqtt_cfg, dry_run=False, on_lot=None):
         self.device_id = device_cfg["device_id"]
         self.firmware_version = device_cfg["firmware_version"]
         site = device_cfg["site_id"]
         self.events_topic = f"parking/v1/{site}/vision/{self.device_id}/events"
         self.status_topic = f"parking/v1/{site}/devices/{self.device_id}/status"
+        self.lot_topic = f"parking/v1/{site}/vision/{self.device_id}/lot"  # backend → Pi: danh sách xe
+        self.on_lot = on_lot
         self.boot_id = str(uuid.uuid4())
         self._seq = itertools.count(1)
         self.client = None
@@ -44,6 +46,7 @@ class Publisher:
         will = self._envelope("device_status") | {"state": "OFFLINE", "firmware_version": self.firmware_version}
         self.client.will_set(self.status_topic, json.dumps(will), qos=1, retain=False)
         self.client.on_connect = self._on_connect
+        self.client.on_message = self._on_message
         self.client.on_disconnect = lambda *a: log.warning("Mất kết nối MQTT, đang thử lại")
         self.client.reconnect_delay_set(min_delay=1, max_delay=30)
         self.client.connect_async(cfg["host"], cfg["port"], keepalive=60)
@@ -54,7 +57,16 @@ class Publisher:
             log.error("MQTT từ chối kết nối: %s", reason_code)
             return
         log.info("Đã kết nối MQTT")
+        if self.on_lot:
+            client.subscribe(self.lot_topic, qos=1)
         self.status()
+
+    def _on_message(self, client, userdata, message):
+        if message.topic == self.lot_topic and self.on_lot:
+            try:
+                self.on_lot(json.loads(message.payload))
+            except ValueError:
+                log.warning("lot_state không phải JSON")
 
     def _envelope(self, message_type):
         return {

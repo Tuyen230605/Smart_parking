@@ -49,9 +49,36 @@ def read_token(token):
         return None
 
 
+def make_unsub_token(plate_key, nonce):
+    payload = _b64(json.dumps({"p": plate_key, "n": nonce}, separators=(",", ":")).encode())
+    sig = _b64(hmac.new(_secret(), b"unsub." + payload.encode(), hashlib.sha256).digest())
+    return f"{payload}.{sig}"
+
+
+def read_unsub_token(token):
+    """Trả {p, n} nếu chữ ký đúng; None nếu giả/hỏng. Không hết hạn (link trong email)."""
+    try:
+        payload, sig = token.split(".")
+        expected = _b64(hmac.new(_secret(), b"unsub." + payload.encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(sig, expected):
+            return None
+        data = json.loads(_unb64(payload))
+        return data if {"p", "n"} <= data.keys() else None
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
+def _web_base():
+    return os.environ.get("WEB_BASE_URL", "http://localhost:5173").rstrip("/")
+
+
+def unsubscribe_url(plate_key, nonce):
+    return f"{_web_base()}/huy-email/{make_unsub_token(plate_key, nonce)}"
+
+
 def claim_url(session):
     token = make_token(session["session_id"], session["claim_nonce"], core.parse_iso(session["claim_expires_at"]))
-    return f"{os.environ.get('WEB_BASE_URL', 'http://localhost:5173').rstrip('/')}/s/{token}"
+    return f"{_web_base()}/s/{token}"
 
 
 # ── bảng giá ───────────────────────────────────────────────────────────────
@@ -160,22 +187,33 @@ def _ses():
     return boto3.client("sesv2")
 
 
-def send_guide_email(to_address, session):
-    """Trả MessageId nếu SES chấp nhận. Không chứa biển số."""
-    slot = session["slot_id"]
-    steps = core.route_steps(slot)
-    subject = f"Chỉ dẫn đỗ xe: ô {slot} (mã lượt {session['session_ref']})"
+def send_guide_email(to_address, session, slot_id=None, unsubscribe=None):
+    """Trả MessageId nếu SES chấp nhận. Không chứa biển số.
+
+    slot_id: ô khách chọn trên trang QR; không chọn thì dùng ô trống gần cổng nhất lúc gửi. Chỉ là chỉ đường.
+    """
+    import logic  # tránh import vòng ở cấp module
+
+    hint = slot_id or logic.suggestion()["slot_id"]
+    label = "Ô bạn chọn" if slot_id else "Ô trống gần cổng nhất lúc này (gợi ý)"
+    lines = ([f"{label}: {hint}", *core.route_steps(hint)] if hint
+             else ["Mời bạn tự tìm chỗ trống theo sơ đồ bãi."])
+    subject = f"Chỉ dẫn đỗ xe (mã lượt {session['session_ref']})"
+    link = claim_url(session) if session.get("claim_nonce") and session.get("claim_expires_at") else None
+    footer = (f"Email tự gửi vì biển số xe đã được liên kết với địa chỉ này. Hủy liên kết: {unsubscribe}"
+              if unsubscribe else "Email này chỉ dùng cho lượt gửi xe hiện tại và được xóa sau tối đa 10 ngày.")
     text = "\n".join(
-        [f"Xin chào,", "", f"Ô đỗ của bạn: {slot}", *[f"{i}. {s}" for i, s in enumerate(steps, 1)], "",
-         f"Mã lượt: {session['session_ref']}",
-         "Email này chỉ dùng cho lượt gửi xe hiện tại và được xóa sau tối đa 10 ngày."]
+        ["Xin chào,", "", *lines, *([f"Bản đồ đường đi (chọn ô khác được): {link}"] if link else []), "",
+         f"Mã lượt: {session['session_ref']}", footer]
     )
-    items = "".join(f"<li>{s}</li>" for s in steps)
+    items = "".join(f"<li>{s}</li>" for s in lines[1:])
+    head = f"<p>{label}: <b style='font-size:20px'>{hint}</b></p>" if hint else f"<p>{lines[0]}</p>"
+    map_html = f"<p><a href='{link}'>Xem bản đồ đường đi / chọn ô khác</a></p>" if link else ""
+    foot_html = (f"Email tự gửi vì biển số xe đã được liên kết với địa chỉ này. <a href='{unsubscribe}'>Hủy liên kết</a>"
+                 if unsubscribe else "Email này chỉ dùng cho lượt gửi xe hiện tại và được xóa sau tối đa 10 ngày.")
     html = (
-        f"<p>Xin chào,</p><p>Ô đỗ của bạn: <b style='font-size:20px'>{slot}</b></p>"
-        f"<ol>{items}</ol><p>Mã lượt: <b>{session['session_ref']}</b></p>"
-        "<p style='color:#666;font-size:12px'>Email này chỉ dùng cho lượt gửi xe hiện tại "
-        "và được xóa sau tối đa 10 ngày.</p>"
+        f"<p>Xin chào,</p>{head}<ol>{items}</ol>{map_html}<p>Mã lượt: <b>{session['session_ref']}</b></p>"
+        f"<p style='color:#666;font-size:12px'>{foot_html}</p>"
     )
     res = _ses().send_email(
         FromEmailAddress=os.environ["SENDER_EMAIL"],

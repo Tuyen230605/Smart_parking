@@ -1,9 +1,10 @@
-"""Nghiệp vụ bãi xe: gán ô nguyên tử, vào/ra, tính phí, cảm biến ô, duyệt thủ công.
+"""Nghiệp vụ bãi xe: vào/ra có quản trị cho phép, tính phí, trạng thái ô, duyệt thủ công.
 
 Trạng thái phiên:
-  MANUAL_REVIEW → (admin) RESERVED | RESOLVED | REJECTED
-  RESERVED → PARKED → EXIT_REQUESTED → EXIT_OPENED → CLOSED
-  RESERVED → EXPIRED (5 phút không vào ô)
+  camera thấy xe vào → ENTRY_PENDING → (admin "Cho vào": mở cần vào) PARKED | REJECTED
+  camera thấy xe ra  → EXIT_REQUESTED (khóa phí) → (admin "Cho ra": mở cần ra) CLOSED
+  MANUAL_REVIEW (biển/làn bất thường) → (admin) PARKED | RESOLVED | REJECTED
+  Không gán ô: nút ô chỉ để chỉ chỗ trống; phiên và tiền chỉ theo camera + quản trị + cần chắn.
 """
 import secrets
 
@@ -49,24 +50,134 @@ def _identity_fields(plate_text, confidence, at):
 
 
 def handle_vehicle_detected(msg):
+    """Camera chỉ báo "có xe" ở làn; mọi lượt vào/ra đều chờ quản trị bấm cho phép trên trang Phiên đỗ.
+
+    Pi demo không đọc biển: plate_text rỗng → backend tự đánh biển demo (11111, 22222…) khi vào,
+    và chọn xe có số lớn nhất đang trong bãi khi ra.
+    """
     event_id = msg["event_id"]
     if core.already_processed(event_id):
         return {"result": "DUPLICATE"}
     lane, color = msg.get("lane_id"), msg.get("card_color")
     plate, conf = msg.get("plate_text"), float(msg.get("plate_confidence") or 0)
-
-    problems = []
     if (lane, color) not in (("ENTRY", "GREEN"), ("EXIT", "RED")):
-        problems.append(f"WRONG_LANE:{lane}+{color}")
-    if not core.plate_key(plate):
-        problems.append("NO_PLATE")
-    elif conf < core.PLATE_THRESHOLD:
-        problems.append("LOW_CONFIDENCE")
-    if problems:
-        return create_review(lane, plate, conf, ",".join(problems), event_id)
+        core.mark_processed(event_id, "vehicle_detected")
+        core.log.warning("bỏ sự kiện sai làn %s+%s", lane, color)
+        return {"result": "IGNORED"}
+    readable = bool(core.plate_key(plate)) and conf >= core.PLATE_THRESHOLD
+
     if lane == "ENTRY":
-        return entry(plate, conf, event_id=event_id, actor=core.PI_ID)
-    return request_exit(plate, conf, event_id=event_id, actor=core.PI_ID)
+        if not readable:
+            plate, conf = next_demo_plate(), 1.0
+        return request_entry(plate, conf, event_id)
+
+    if readable:
+        return request_exit(plate, conf, event_id=event_id, actor=core.PI_ID)
+    car = newest_car()
+    if not car:
+        core.mark_processed(event_id, "vehicle_detected")
+        core.log.info("làn RA thấy xe nhưng bãi không còn xe nào chưa yêu cầu ra")
+        return {"result": "NO_CAR"}
+    return request_exit(car["plate_display"], 1.0, event_id=event_id, actor=core.PI_ID)
+
+
+def _sessions_in(states):
+    names = {"#s": "state"}
+    values = {f":s{i}": st for i, st in enumerate(states)}
+    return core.scan_all("sessions", FilterExpression="#s IN (" + ", ".join(values) + ")",
+                         ExpressionAttributeNames=names, ExpressionAttributeValues=values)
+
+
+def next_demo_plate():
+    """Số nhỏ nhất chưa dùng bởi xe trong bãi hoặc xe đang chờ vào."""
+    used = {s.get("plate_normalized") for s in _sessions_in(core.IN_LOT_STATES + ("ENTRY_PENDING",))}
+    k = 1
+    while core.demo_plate(k) in used:
+        k += 1
+    return core.demo_plate(k)
+
+
+def _car_order(s):
+    return (core.demo_number(s.get("plate_display")) or 0, s.get("checkin_at") or "")
+
+
+def newest_car():
+    """Xe ra tiếp theo: số lớn nhất trong các xe đang đỗ (chưa yêu cầu ra)."""
+    cars = [s for s in _sessions_in(("RESERVED", "PARKED")) if s.get("plate_display")]
+    return max(cars, key=_car_order) if cars else None
+
+
+def request_entry(plate, conf, event_id):
+    """Ghi lượt "chờ cho vào"; quản trị bấm Cho vào mới mở cần và tính là xe trong bãi."""
+    if event_id and not core.mark_processed(event_id, "vehicle_detected"):
+        return {"result": "DUPLICATE"}
+    at = core.now()
+    session = {
+        "session_id": core.ulid(),
+        "session_ref": core.short_ref(),
+        "state": "ENTRY_PENDING",
+        "review_lane": "ENTRY",
+        "created_at": core.iso(at),
+        "history": [_history(core.PI_ID, "ENTRY_DETECTED")],
+        **_identity_fields(plate, conf, at),
+    }
+    core.table("sessions").put_item(Item=session)
+    core.alert("ENTRY_PENDING", f"Xe {plate} (lượt {session['session_ref']}) chờ cho vào", level="INFO",
+               session_id=session["session_id"])
+    services.display_command("ENTRY_ROUTE", [f"XE {plate}", "Cho nhan vien", "cho phep vao"])
+    publish_lot()
+    return {"result": "ENTRY_PENDING", "session_id": session["session_id"], "plate": plate}
+
+
+def auto_email(session_id, key):
+    """Biển số đã được khách liên kết email → tự gửi chỉ dẫn, không cần quét QR."""
+    link = core.table("plate_emails").get_item(Key={"plate_normalized": key}).get("Item") if key else None
+    if not link:
+        return False
+    session = get_session(session_id)
+    at = core.iso(core.now())
+    try:
+        mid = services.send_guide_email(link["email"], session,
+                                        unsubscribe=services.unsubscribe_url(key, link["nonce"]))
+        expr, values = "SET email_status = :st, ses_message_id = :m, email_auto = :t, email_collected_at = :at", \
+            {":st": "ACCEPTED_BY_SES", ":m": mid or "-", ":t": True, ":at": at}
+    except Exception as err:  # noqa: BLE001 — lỗi SES không chặn xe vào
+        core.alert("EMAIL_FAILED", f"Không tự gửi được email cho lượt {session['session_ref']} ({type(err).__name__})",
+                   session_id=session_id)
+        expr, values = "SET email_status = :st, email_error = :r", {":st": "FAILED", ":r": type(err).__name__}
+    core.table("sessions").update_item(Key={"session_id": session_id}, UpdateExpression=expr,
+                                       ExpressionAttributeValues=values)
+    return True
+
+
+def lot_state():
+    """Danh sách xe trong bãi + xe chờ vào/chờ ra, sắp theo số xe (nguồn duy nhất cho web và Pi)."""
+    sessions = sorted(_sessions_in(core.IN_LOT_STATES + ("ENTRY_PENDING",)), key=_car_order)
+
+    def view(s):
+        return {"plate": s.get("plate_display"), "session_id": s["session_id"], "session_ref": s.get("session_ref"),
+                "state": s["state"], "checkin_at": s.get("checkin_at")}
+
+    return {
+        "in_lot": [view(s) for s in sessions if s["state"] in core.IN_LOT_STATES],
+        "pending_entry": [view(s) for s in sessions if s["state"] == "ENTRY_PENDING"],
+        "pending_exit": [view(s) for s in sessions if s["state"] == "EXIT_REQUESTED"],
+    }
+
+
+def publish_lot():
+    """Gửi danh sách xe xuống Pi (trang camera hiển thị). Lỗi gửi không làm hỏng nghiệp vụ."""
+    state = lot_state()
+    try:
+        services.mqtt_publish(f"parking/v1/{core.SITE_ID}/vision/{core.PI_ID}/{core.LOT_TOPIC_LEAF}", {
+            "schema_version": 1, "message_type": "lot_state", "occurred_at": core.iso(core.now()),
+            "in_lot": [c["plate"] for c in state["in_lot"]],
+            "pending_entry": [c["plate"] for c in state["pending_entry"]],
+            "pending_exit": [c["plate"] for c in state["pending_exit"]],
+        })
+    except Exception as err:  # noqa: BLE001
+        core.log.warning("không gửi được lot_state: %s", err)
+    return state
 
 
 def create_review(lane, plate, conf, reason, event_id=None):
@@ -93,112 +204,106 @@ def create_review(lane, plate, conf, reason, event_id=None):
 # ── vào bãi ────────────────────────────────────────────────────────────────
 
 
-def assignable_slots():
-    """Ô AVAILABLE theo thứ tự ưu tiên; rỗng nếu board ô offline (UC-04: không gán trên dữ liệu cũ)."""
+def free_slots():
+    """Ô đang trống theo thứ tự gần cổng trước; None nếu board ô offline (không biết ô nào trống)."""
     if not services.device_online(core.SLOTS_ID):
-        return []
+        return None
     slots = {s["slot_id"]: s for s in core.scan_all("slots")}
-    return [
-        sid for sid in core.SLOT_IDS
-        if sid in slots and slots[sid].get("status") == "AVAILABLE" and not slots[sid].get("reserved_session_id")
-    ]
+    return [sid for sid in core.SLOT_IDS if slots.get(sid, {}).get("status") == "AVAILABLE"]
+
+
+def suggestion():
+    """Gợi ý chỉ đường (KHÔNG gán ô): ô trống gần cổng nhất lúc hỏi và số ô còn trống."""
+    free = free_slots()
+    if free is None:
+        return {"slot_id": None, "free_count": None}
+    return {"slot_id": free[0] if free else None, "free_count": len(free)}
 
 
 def entry(plate, conf, event_id=None, actor="system", review_session=None, reason=None):
-    """Giữ một ô + tạo phiên + khóa biển số trong cùng một transaction rồi mở cần vào."""
+    """Tạo phiên + khóa biển số trong một transaction rồi mở cần vào.
+
+    Không gán ô: nút/cảm biến ô chỉ dùng để chỉ chỗ trống, không liên quan phiên hay tiền.
+    Chỉ từ chối khi board ô đang online và báo không còn ô trống nào (bãi đầy).
+    """
     key = core.plate_key(plate)
     at = core.now()
-    nonce = secrets.token_urlsafe(16)  # 128 bit
+    free = free_slots()
+    if free is not None and not free:
+        if event_id and not core.mark_processed(event_id, "vehicle_detected"):
+            return {"result": "DUPLICATE"}
+        services.display_command("LOT_FULL", ["BAI DA DAY", "Xin loi quy khach", "Vui long quay lai"])
+        core.alert("LOT_FULL", "Xe yêu cầu vào nhưng không còn ô trống", level="INFO")
+        if review_session:
+            raise BusinessError(409, "SLOT_CONFLICT", "Bãi đã đầy")
+        return {"result": "LOT_FULL"}
+
     base = {
-        "state": "RESERVED",
+        "state": "PARKED",
         "checkin_at": core.iso(at),
-        "reserved_at": core.iso(at),
-        "claim_nonce": nonce,
+        "claim_nonce": secrets.token_urlsafe(16),  # 128 bit
         "claim_expires_at": core.iso(at + core.CLAIM_TTL),
         "pricing": services.current_pricing(),
         **_identity_fields(plate, conf, at),
     }
     if review_session:
         session_id, session_ref = review_session["session_id"], review_session["session_ref"]
+        fields = {**base, "resolved_by": actor}
+        values = {f":{k}": v for k, v in fields.items()}
+        values[":review"] = "MANUAL_REVIEW"
+        values[":pending"] = "ENTRY_PENDING"
+        values[":h"] = [_history(actor, "ALLOW_ENTRY", reason)]
+        items = [{"Update": {
+            "TableName": core.table_name("sessions"),
+            "Key": {"session_id": session_id},
+            "ConditionExpression": "#state IN (:review, :pending)",
+            "UpdateExpression": "SET " + ", ".join(f"#{k} = :{k}" for k in fields)
+                                + ", history = list_append(history, :h)",
+            "ExpressionAttributeNames": {f"#{k}": k for k in fields},
+            "ExpressionAttributeValues": values,
+        }}]
     else:
         session_id, session_ref = core.ulid(), core.short_ref()
-
-    candidates = assignable_slots()
-    for slot_id in candidates:
-        items = [{
-            "Update": {
-                "TableName": core.table_name("slots"),
-                "Key": {"slot_id": slot_id},
-                "ConditionExpression": "#st = :avail AND attribute_not_exists(reserved_session_id)",
-                "UpdateExpression": "SET #st = :res, reserved_session_id = :sid, updated_at = :now",
-                "ExpressionAttributeNames": {"#st": "status"},
-                "ExpressionAttributeValues": {":avail": "AVAILABLE", ":res": "RESERVED", ":sid": session_id,
-                                              ":now": core.iso(at)},
-            }
-        }]
-        if review_session:
-            fields = {**base, "slot_id": slot_id, "resolved_by": actor}
-            names = {f"#{k}": k for k in fields}
-            values = {f":{k}": v for k, v in fields.items()}
-            values[":review"] = "MANUAL_REVIEW"
-            values[":h"] = [_history(actor, "RESOLVE_ENTRY", reason)]
-            items.append({"Update": {
-                "TableName": core.table_name("sessions"),
-                "Key": {"session_id": session_id},
-                "ConditionExpression": "#state = :review",
-                "UpdateExpression": "SET " + ", ".join(f"#{k} = :{k}" for k in fields)
-                                    + ", history = list_append(history, :h)",
-                "ExpressionAttributeNames": names,
-                "ExpressionAttributeValues": values,
-            }})
-        else:
-            items.append({"Put": {
-                "TableName": core.table_name("sessions"),
-                "ConditionExpression": "attribute_not_exists(session_id)",
-                "Item": {"session_id": session_id, "session_ref": session_ref, "slot_id": slot_id,
-                         "created_at": core.iso(at), "history": [_history(actor, "ENTRY")], **base},
-            }})
+        items = [{"Put": {
+            "TableName": core.table_name("sessions"),
+            "ConditionExpression": "attribute_not_exists(session_id)",
+            "Item": {"session_id": session_id, "session_ref": session_ref, "created_at": core.iso(at),
+                     "history": [_history(actor, "ENTRY")], **base},
+        }}]
+    items.append({"Put": {
+        "TableName": core.table_name("plates"),
+        "ConditionExpression": "attribute_not_exists(plate_normalized)",
+        "Item": {"plate_normalized": key, "session_id": session_id, "created_at": core.iso(at),
+                 "ttl": core.epoch(at + core.IDENTITY_TTL)},
+    }})
+    if event_id:
         items.append({"Put": {
-            "TableName": core.table_name("plates"),
-            "ConditionExpression": "attribute_not_exists(plate_normalized)",
-            "Item": {"plate_normalized": key, "session_id": session_id, "created_at": core.iso(at),
-                     "ttl": core.epoch(at + core.IDENTITY_TTL)},
+            "TableName": core.table_name("processed"),
+            "ConditionExpression": "attribute_not_exists(message_id)",
+            "Item": core.processed_item(event_id, "vehicle_detected"),
         }})
-        if event_id:
-            items.append({"Put": {
-                "TableName": core.table_name("processed"),
-                "ConditionExpression": "attribute_not_exists(message_id)",
-                "Item": core.processed_item(event_id, "vehicle_detected"),
-            }})
-        try:
-            core.client().transact_write_items(TransactItems=items)
-        except core.client().exceptions.TransactionCanceledException as err:
-            codes = [r.get("Code") for r in err.response.get("CancellationReasons", [])]
-            if len(codes) > 3 and codes[3] == "ConditionalCheckFailed":
-                return {"result": "DUPLICATE"}
-            if codes[2] == "ConditionalCheckFailed":
-                if review_session:
-                    raise BusinessError(409, "INVALID_STATE", "Biển số này đang có phiên mở") from err
-                return create_review("ENTRY", plate, conf, "PLATE_ALREADY_ACTIVE", event_id)
-            if codes[1] == "ConditionalCheckFailed":
-                raise BusinessError(409, "INVALID_STATE", "Phiên không còn ở trạng thái chờ duyệt") from err
-            continue  # chỉ ô bị giữ trước → thử ô kế tiếp (SIM-09)
-        core.log.info("session %s reserved", session_id)
-        services.gate_command("ENTRY", "OPEN", session_id)
-        services.display_command("ENTRY_ROUTE", core.oled_route(slot_id))
-        if not services.device_online(core.GATE_ID):
-            core.alert("DEVICE_OFFLINE", f"Đã gán ô {slot_id} cho lượt {session_ref} nhưng ESP cổng đang offline",
-                       session_id=session_id)
-        return {"result": "RESERVED", "session_id": session_id, "slot_id": slot_id}
-
-    # Không còn ô hợp lệ → bãi đầy, không mở cần.
-    if event_id and not core.mark_processed(event_id, "vehicle_detected"):
-        return {"result": "DUPLICATE"}
-    services.display_command("LOT_FULL", ["BAI DA DAY", "Xin loi quy khach", "Vui long quay lai"])
-    core.alert("LOT_FULL", "Xe yêu cầu vào nhưng không còn ô trống/đáng tin", level="INFO")
-    if review_session:
-        raise BusinessError(409, "SLOT_CONFLICT", "Không còn ô trống để gán")
-    return {"result": "LOT_FULL"}
+    try:
+        core.client().transact_write_items(TransactItems=items)
+    except core.client().exceptions.TransactionCanceledException as err:
+        codes = [r.get("Code") for r in err.response.get("CancellationReasons", [])]
+        if len(codes) > 2 and codes[2] == "ConditionalCheckFailed":
+            return {"result": "DUPLICATE"}
+        if codes[1] == "ConditionalCheckFailed":
+            if review_session:
+                raise BusinessError(409, "INVALID_STATE", "Biển số này đang có phiên mở") from err
+            return create_review("ENTRY", plate, conf, "PLATE_ALREADY_ACTIVE", event_id)
+        if review_session:
+            raise BusinessError(409, "INVALID_STATE", "Phiên không còn ở trạng thái chờ duyệt") from err
+        raise
+    core.log.info("session %s entered", session_id)
+    services.gate_command("ENTRY", "OPEN", session_id)
+    hint = free[0] if free else None
+    services.display_command("ENTRY_ROUTE", core.oled_hint(hint, len(free) if free is not None else None))
+    if not services.device_online(core.GATE_ID):
+        core.alert("DEVICE_OFFLINE", f"Lượt {session_ref} đã vào nhưng ESP cổng đang offline", session_id=session_id)
+    auto_email(session_id, key)
+    publish_lot()
+    return {"result": "PARKED", "session_id": session_id, "suggested_slot": hint}
 
 
 # ── ra bãi ─────────────────────────────────────────────────────────────────
@@ -218,7 +323,9 @@ def request_exit(plate, conf, event_id=None, actor="system"):
     session = find_active_session(plate)
     if not session or session["state"] not in ("RESERVED", "PARKED", "EXIT_REQUESTED", "EXIT_OPENED"):
         if actor == core.PI_ID:
-            return create_review("EXIT", plate, conf, "NO_ACTIVE_SESSION", event_id)
+            if event_id:
+                core.mark_processed(event_id, "vehicle_detected")
+            return {"result": "NO_CAR"}
         raise BusinessError(404, "NOT_FOUND", "Không có phiên đang đỗ với biển số này")
     if event_id and not core.mark_processed(event_id, "vehicle_detected"):
         return {"result": "DUPLICATE"}
@@ -248,23 +355,21 @@ def request_exit(plate, conf, event_id=None, actor="system"):
             return {"result": "INVALID_STATE"}
         raise
     _show_fee(session)
-    if payment == "NO_CHARGE":
-        try:
-            open_exit(session["session_id"], actor="system")
-        except BusinessError as err:
-            core.alert("DEVICE_OFFLINE", f"Lượt {session['session_ref']} miễn phí nhưng chưa mở được cổng ra: {err.message}",
-                       session_id=session["session_id"])
-    else:
-        core.alert("PAYMENT_PENDING", f"Lượt {session['session_ref']} chờ thu {services.format_vnd(fee)} ₫",
-                   level="INFO", session_id=session["session_id"])
+    # Không tự mở cần ra (kể cả miễn phí): quản trị xem phí trên trang Phiên đỗ rồi bấm cho ra.
+    what = "miễn phí" if fee == 0 else f"thu {services.format_vnd(fee)} ₫"
+    core.alert("PAYMENT_PENDING", f"Xe {session.get('plate_display', '')} (lượt {session['session_ref']}) chờ cho ra: {what}",
+               level="INFO", session_id=session["session_id"])
+    publish_lot()
     return {"result": "EXIT_REQUESTED", "session_id": session["session_id"], "fee_vnd": fee}
 
 
 def _show_fee(session):
     fee = int(session.get("fee_vnd") or 0)
-    third = "Mien phi - Moi ra" if fee == 0 else ("Da thu - Moi ra" if session.get("payment_status") in
-                                                 ("PAID_CASH", "WAIVED") else "Moi thanh toan")
-    services.display_command("EXIT_FEE", [f"RA: {session.get('slot_id', '?')}", f"Phi: {fee} VND", third])
+    if session.get("state") == "EXIT_OPENED":
+        third = "Moi ra"
+    else:
+        third = "Cho nhan vien" if fee == 0 else "Moi thanh toan"
+    services.display_command("EXIT_FEE", [f"RA: luot {session.get('session_ref', '?')}", f"Phi: {fee} VND", third])
 
 
 def record_payment(session_id, status, amount, note, actor):
@@ -296,6 +401,7 @@ def record_payment(session_id, status, amount, note, actor):
 
 
 def open_exit(session_id, actor):
+    """Quản trị bấm Cho ra: mở cần RA và kết thúc phiên ngay (xe rời danh sách xe trong bãi)."""
     session = get_session(session_id)
     if session["state"] not in ("EXIT_REQUESTED", "EXIT_OPENED"):
         raise BusinessError(409, "INVALID_STATE", "Phiên chưa yêu cầu ra")
@@ -304,15 +410,20 @@ def open_exit(session_id, actor):
     if not services.device_online(core.GATE_ID):
         raise BusinessError(503, "DEVICE_OFFLINE", "ESP cổng đang offline, không thể mở cần an toàn")
     cmd = services.gate_command("EXIT", "OPEN", session_id)
+    at = core.iso(core.now())
     session = core.table("sessions").update_item(
         Key={"session_id": session_id},
-        UpdateExpression="SET #s = :eo, exit_opened_at = :at, history = list_append(history, :h)",
+        UpdateExpression="SET #s = :closed, exit_opened_at = :at, exit_confirmed_at = :at, exit_command_id = :cmd, "
+                         "history = list_append(history, :h) REMOVE claim_nonce, email",
         ExpressionAttributeNames={"#s": "state"},
-        ExpressionAttributeValues={":eo": "EXIT_OPENED", ":at": core.iso(core.now()),
+        ExpressionAttributeValues={":closed": "CLOSED", ":at": at, ":cmd": cmd["command_id"],
                                    ":h": [_history(actor, "OPEN_EXIT", cmd["command_id"])]},
         ReturnValues="ALL_NEW",
     )["Attributes"]
-    _show_fee(session)
+    release_plate(session)
+    services.display_command("EXIT_FEE", [f"RA: luot {session.get('session_ref', '?')}",
+                                          f"Phi: {int(session.get('fee_vnd') or 0)} VND", "Moi ra"])
+    publish_lot()
     return session
 
 
@@ -333,10 +444,6 @@ def confirm_passage(session_id, actor):
     )["Attributes"]
     release_plate(session)
     services.display_command("IDLE", ["SMART PARKING", "Xin chao", ""], seconds=5)
-    slot = core.table("slots").get_item(Key={"slot_id": session.get("slot_id", "-")}).get("Item")
-    if slot and slot.get("occupied"):
-        core.alert("SLOT_MISMATCH", f"Lượt {session['session_ref']} đã ra nhưng ô {slot['slot_id']} vẫn báo có xe",
-                   session_id=session_id)
     return session
 
 
@@ -360,7 +467,7 @@ def release_plate(session):
 
 def resolve_review(session_id, body, actor):
     session = get_session(session_id)
-    if session["state"] != "MANUAL_REVIEW":
+    if session["state"] not in ("MANUAL_REVIEW", "ENTRY_PENDING"):
         raise BusinessError(409, "INVALID_STATE", "Phiên không chờ duyệt")
     action = (body.get("action") or "").upper()
     reason = (body.get("reason") or "").strip() or "Quản trị xác nhận"
@@ -371,6 +478,7 @@ def resolve_review(session_id, body, actor):
             ExpressionAttributeNames={"#s": "state"},
             ExpressionAttributeValues={":rej": "REJECTED", ":h": [_history(actor, "REJECT", reason)]},
         )
+        publish_lot()
         return get_session(session_id)
     plate = body.get("plate_text")
     if not core.plate_key(plate):
@@ -394,7 +502,7 @@ def resolve_review(session_id, body, actor):
 def renew_claim(session_id, actor):
     session = get_session(session_id)
     if session["state"] not in ("RESERVED", "PARKED"):
-        raise BusinessError(409, "INVALID_STATE", "Chỉ cấp lại QR cho phiên đang giữ ô/đang đỗ")
+        raise BusinessError(409, "INVALID_STATE", "Chỉ cấp lại QR cho phiên đang trong bãi")
     at = core.now()
     return core.table("sessions").update_item(
         Key={"session_id": session_id},
@@ -409,78 +517,27 @@ def renew_claim(session_id, actor):
 
 
 def apply_slot(slot_id, occupied, source, force=False):
-    """Cập nhật tín hiệu hiện trường của một ô và suy ra trạng thái nghiệp vụ.
-
-    Không bao giờ ghi đè RESERVED của backend bằng tín hiệu trống.
-    """
+    """Cập nhật trạng thái một ô từ nút bấm: chỉ để chỉ chỗ trống, không đụng tới phiên."""
     if slot_id not in core.SLOT_IDS:
         return
     if source != core.slot_source(slot_id):
         core.log.warning("slot %s sai source %s", slot_id, source)
         return
-    at = core.iso(core.now())
-    for _ in range(3):
-        slot = core.table("slots").get_item(Key={"slot_id": slot_id}).get("Item") or {"slot_id": slot_id}
-        old_status, old_occ = slot.get("status"), slot.get("occupied")
-        if not force and old_occ == occupied and old_status != "UNKNOWN":
-            return
-        res_sid = slot.get("reserved_session_id")
-        park_sid = None
-        if old_status == "OUT_OF_SERVICE":
-            status = "OUT_OF_SERVICE"
-        elif occupied:
-            status = "OCCUPIED"
-            if res_sid:
-                park_sid = res_sid
-            elif old_status == "AVAILABLE":
-                core.alert("WRONG_SLOT", f"Ô {slot_id} có xe nhưng không được gán cho lượt nào")
-        else:
-            status = "AVAILABLE"
-            if res_sid:
-                sess = core.table("sessions").get_item(Key={"session_id": res_sid}).get("Item")
-                if sess and sess.get("state") == "RESERVED":
-                    status = "RESERVED"
-                else:
-                    res_sid = None
-        expr = "SET #st = :st, occupied = :occ, updated_at = :now, sensor_seen_at = :now, #src = :src"
-        values = {":st": status, ":occ": occupied, ":now": at, ":src": source}
-        if res_sid:
-            expr += ", reserved_session_id = :sid"
-            values[":sid"] = res_sid
-        else:
-            expr += " REMOVE reserved_session_id"
-        cond = "attribute_not_exists(updated_at)" if "updated_at" not in slot else "updated_at = :old"
-        if "updated_at" in slot:
-            values[":old"] = slot["updated_at"]
-        try:
-            core.table("slots").update_item(
-                Key={"slot_id": slot_id}, UpdateExpression=expr, ConditionExpression=cond,
-                ExpressionAttributeNames={"#st": "status", "#src": "source"}, ExpressionAttributeValues=values,
-            )
-            break
-        except Exception as err:  # noqa: BLE001
-            if not core.is_conditional_failure(err):
-                raise
+    slot = core.table("slots").get_item(Key={"slot_id": slot_id}).get("Item") or {}
+    if slot.get("status") == "OUT_OF_SERVICE":
+        status = "OUT_OF_SERVICE"
     else:
-        core.log.warning("slot %s update conflict", slot_id)
+        status = "OCCUPIED" if occupied else "AVAILABLE"
+    if not force and slot.get("status") == status and slot.get("occupied") == occupied:
         return
-    if park_sid:
-        _mark_parked(park_sid, slot_id)
-
-
-def _mark_parked(session_id, slot_id):
-    try:
-        core.table("sessions").update_item(
-            Key={"session_id": session_id},
-            ConditionExpression="#s = :r AND slot_id = :slot",
-            UpdateExpression="SET #s = :p, parked_at = :at, history = list_append(history, :h)",
-            ExpressionAttributeNames={"#s": "state"},
-            ExpressionAttributeValues={":r": "RESERVED", ":p": "PARKED", ":slot": slot_id,
-                                       ":at": core.iso(core.now()), ":h": [_history(core.SLOTS_ID, "PARKED")]},
-        )
-    except Exception as err:  # noqa: BLE001
-        if not core.is_conditional_failure(err):
-            raise
+    at = core.iso(core.now())
+    core.table("slots").update_item(
+        Key={"slot_id": slot_id},
+        UpdateExpression="SET #st = :st, occupied = :occ, updated_at = :now, sensor_seen_at = :now, #src = :src "
+                         "REMOVE reserved_session_id",
+        ExpressionAttributeNames={"#st": "status", "#src": "source"},
+        ExpressionAttributeValues={":st": status, ":occ": occupied, ":now": at, ":src": source},
+    )
 
 
 def accept_slot_seq(msg):

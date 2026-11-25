@@ -42,7 +42,7 @@ def seed():
 
 def monitor():
     at = core.now()
-    result = {"offline": [], "expired": [], "ack_timeouts": 0}
+    result = {"offline": [], "ack_timeouts": 0}
 
     # 1. Thiết bị im lặng > 90 giây → OFFLINE.
     devices = {d["device_id"]: d for d in core.scan_all("devices")}
@@ -80,77 +80,6 @@ def monitor():
             core.alert("GATE_NO_ACK", f"Cần {info['gate']} không phản hồi lệnh {info['action']}", level="ERROR")
             result["ack_timeouts"] += 1
 
-    # 4. Giữ ô quá 5 phút mà xe chưa vào → EXPIRED, giải phóng ô nếu vẫn trống (SIM-13).
-    reserved = core.scan_all("sessions", FilterExpression="#s = :r",
-                             ExpressionAttributeNames={"#s": "state"}, ExpressionAttributeValues={":r": "RESERVED"})
-    for s in reserved:
-        if at - core.parse_iso(s["reserved_at"]) <= core.RESERVATION_TIMEOUT:
-            continue
-        try:
-            core.table("sessions").update_item(
-                Key={"session_id": s["session_id"]}, ConditionExpression="#s = :r",
-                UpdateExpression="SET #s = :e, expired_at = :now, history = list_append(history, :h) REMOVE claim_nonce",
-                ExpressionAttributeNames={"#s": "state"},
-                ExpressionAttributeValues={":r": "RESERVED", ":e": "EXPIRED", ":now": core.iso(at),
-                                           ":h": [{"at": core.iso(at), "actor": "system", "action": "EXPIRED"}]},
-            )
-        except Exception as err:  # noqa: BLE001
-            if core.is_conditional_failure(err):
-                continue
-            raise
-        _release_slot(s["slot_id"], s["session_id"])
-        logic.release_plate(s)
-        core.alert("RESERVATION_EXPIRED", f"Lượt {s['session_ref']} không vào ô {s['slot_id']} sau 5 phút",
-                   session_id=s["session_id"])
-        result["expired"].append(s["session_id"])
+    # 4. Gửi lại danh sách xe trong bãi cho Pi (trang camera) mỗi lần chạy.
+    logic.publish_lot()
     return result
-
-
-def _release_slot(slot_id, session_id):
-    names = {"#s": "status"}
-    try:  # còn RESERVED cho đúng phiên → trống lại
-        core.table("slots").update_item(
-            Key={"slot_id": slot_id}, ConditionExpression="#s = :r AND reserved_session_id = :sid",
-            UpdateExpression="SET #s = :a, updated_at = :now REMOVE reserved_session_id",
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues={":r": "RESERVED", ":a": "AVAILABLE", ":sid": session_id,
-                                       ":now": core.iso(core.now())},
-        )
-        return
-    except Exception as err:  # noqa: BLE001
-        if not core.is_conditional_failure(err):
-            raise
-    try:  # UNKNOWN/OCCUPIED: chỉ gỡ liên kết phiên, giữ trạng thái hiện trường
-        core.table("slots").update_item(
-            Key={"slot_id": slot_id}, ConditionExpression="reserved_session_id = :sid",
-            UpdateExpression="REMOVE reserved_session_id", ExpressionAttributeValues={":sid": session_id},
-        )
-    except Exception as err:  # noqa: BLE001
-        if not core.is_conditional_failure(err):
-            raise
-
-
-def purge():
-    """Xóa biển số/email/token đã thu thập quá 9 ngày 23 giờ (UC-10)."""
-    at = core.now()
-    cutoff = core.iso(at - core.PURGE_AFTER)
-    purged = 0
-    sessions = core.scan_all(
-        "sessions",
-        FilterExpression="(attribute_exists(plate_normalized) AND plate_collected_at < :c) OR "
-                         "(attribute_exists(email) AND email_collected_at < :c) OR "
-                         "(attribute_exists(claim_nonce) AND created_at < :c)",
-        ExpressionAttributeValues={":c": cutoff},
-    )
-    for s in sessions:
-        if s.get("state") in core.OPEN_STATES:
-            core.alert("PURGE_OPEN_SESSION", f"Lượt {s['session_ref']} còn mở sát hạn 10 ngày, đã xóa định danh",
-                       session_id=s["session_id"])
-        logic.release_plate(s)
-        core.table("sessions").update_item(
-            Key={"session_id": s["session_id"]},
-            UpdateExpression="SET identity_purged_at = :now REMOVE plate_normalized, plate_display, email, claim_nonce",
-            ExpressionAttributeValues={":now": core.iso(at)},
-        )
-        purged += 1
-    return {"purged": purged}

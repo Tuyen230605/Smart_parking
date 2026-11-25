@@ -14,7 +14,7 @@ const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString()
 
 const slots: Slot[] = SLOT_IDS.map((slot_id, i) => ({
   slot_id,
-  source: slot_id === "F1-A1" ? "SENSOR" : "BUTTON",
+  source: "BUTTON",
   status: i === 0 ? "RESERVED" : i % 4 === 1 ? "OCCUPIED" : "AVAILABLE",
   updated_at: now(),
 }));
@@ -40,7 +40,7 @@ export const mockApi: Api = {
 
   getClaim: async (token) => delay(structuredClone(findClaim(token))),
 
-  submitClaimEmail: async (token, email, consent, idempotencyKey) => {
+  submitClaimEmail: async (token, email, consent, idempotencyKey, _slotId, remember) => {
     await delay(null);
     const claim = findClaim(token);
     if (usedKeys.has(idempotencyKey)) return { email_status: "QUEUED" };
@@ -50,14 +50,23 @@ export const mockApi: Api = {
     if (claim.email_submitted) throw new ApiError(409, "EMAIL_ALREADY_SENT", "Phiên này đã gửi email");
     usedKeys.add(idempotencyKey);
     claim.email_submitted = true;
+    if (remember) claim.linked_email = email.slice(0, 2) + "***@" + email.split("@")[1];
     return { email_status: "QUEUED" };
   },
+
+  forgetClaimEmail: async (token) => {
+    findClaim(token).linked_email = null;
+    return delay({ linked_email: null as null });
+  },
+
+  unsubscribe: async () => delay({ ok: true }),
 
   getActiveClaims: () =>
     delay(
       Object.entries(claims).map(([token, c]) => ({
         session_ref: c.session_ref,
         slot_id: c.slot_id,
+        route_steps: c.route_steps,
         claim_url: `${location.origin}/s/${token}`,
         claim_expires_at: c.claim_expires_at,
       })),
@@ -83,10 +92,8 @@ export const mockApi: Api = {
     const s = findSession(id);
     if (s.state !== "MANUAL_REVIEW") throw new ApiError(409, "INVALID_STATE", "Phiên không chờ duyệt");
     if (action === "REJECT") return update(s, { state: "REJECTED" });
-    const slot = slots.find((x) => x.status === "AVAILABLE");
-    if (!slot) throw new ApiError(409, "SLOT_CONFLICT", "Không còn ô trống");
-    slot.status = "RESERVED";
-    return update(s, { state: action === "ENTRY" ? "RESERVED" : "RESOLVED", plate_text: plateText, slot_id: slot.slot_id, checkin_at: now() });
+    if (!slots.some((x) => x.status === "AVAILABLE")) throw new ApiError(409, "SLOT_CONFLICT", "Bãi đã đầy");
+    return update(s, { state: action === "ENTRY" ? "PARKED" : "RESOLVED", plate_text: plateText, checkin_at: now() });
   },
 
   renewClaim: async (id) => update(findSession(id), { claim_expires_at: inMinutes(15) }),

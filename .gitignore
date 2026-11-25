@@ -34,3 +34,6 @@ simulation/.slots-state.json
 
 # PlatformIO
 .pio/
+
+# Danh sách xe demo trên Pi
+edge/raspberry-pi-vision/cars.json

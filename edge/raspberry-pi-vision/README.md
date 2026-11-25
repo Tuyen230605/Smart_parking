@@ -1,36 +1,36 @@
-# Raspberry Pi 5: camera và nhận diện
+# Raspberry Pi 5: camera phát hiện xe ở làn vào/ra
 
-Một camera chụp cả hai ROI `ENTRY`/`EXIT`. Thẻ xanh chỉ hợp lệ ở làn vào, thẻ đỏ chỉ hợp lệ ở làn ra. Pi phát hiện màu ổn định qua nhiều frame, OCR biển số tại chỗ và publish `vehicle_detected` theo [MQTT v1](../../docs/mqtt-contract.md). OCR yếu/sai làn vẫn gửi sự kiện để backend chuyển quản trị xác nhận; Pi không tự mở cần.
+Bản demo **không dùng thẻ màu hay biển in**. Một camera nhìn hai khung làn (mặc định nửa trái = `ENTRY`, nửa phải = `EXIT`). Pi so mỗi khung với ảnh nền trống; khi có vật (bàn tay, xe mô hình) che vào đủ lâu thì publish **một** `vehicle_detected` (`plate_text = null`) theo [MQTT v1](../../docs/mqtt-contract.md). Backend đánh biển demo (`11111`, `22222`…), chờ quản trị bấm **Cho vào / Cho ra** trên web rồi mới mở cần, và gửi lại **danh sách xe trong bãi** để trang camera hiển thị. Pi không tự mở cần, không giữ danh sách riêng.
 
-MVP xử lý ảnh trong RAM, không upload ảnh cloud. Cần có bộ ảnh/video fixture giả lập và báo cáo góc camera, ánh sáng, confidence, tỷ lệ đọc đúng. Một camera không đủ rõ hai làn thì demo tuần tự từng làn với cùng schema.
+Ảnh chỉ xử lý trong RAM, không upload cloud.
 
 ## Pipeline
 
 ```text
-Picamera2 (2304x1296, 10 fps)
-  → mỗi ROI làn: lọc HSV → GREEN / RED / không có thẻ        (detector.CardDetector)
-  → cùng màu stable_frames frame liên tiếp                     (detector.LaneTracker)
-  → OCR vùng biển số bằng RapidOCR (ONNX, CPU) tối đa ocr_attempts lần, lấy kết quả tốt nhất
-  → chuẩn hóa 51A-12345; không khớp mẫu biển VN thì confidence ≤ 0,5
-  → publish vehicle_detected (QoS 1) một lần; chờ thẻ rời ROI clear_frames frame mới nhận xe mới,
-    cùng xe/làn không phát lại trong 5 giây
+Picamera2 (1920x1080 cho OV5647, 10 fps)
+  → mỗi khung làn: thu nhỏ, xám, làm mờ; so với ảnh nền (bù chênh sáng toàn khung)   (presence.LanePresence)
+  → tỉ lệ điểm ảnh khác nền ≥ min_ratio trong stable_frames frame → báo 1 lượt
+  → phải trống clear_frames frame (và cách cooldown_s) mới nhận lượt mới; vật nằm yên > absorb_after_s thì nhập vào nền
+  → publish vehicle_detected (QoS 1): ENTRY+GREEN / EXIT+RED, plate_text = null
+  → subscribe parking/v1/site-01/vision/pi-01/lot ← backend gửi danh sách xe (trong bãi / chờ vào / chờ ra)
   → device_status mỗi 30 giây, Last Will OFFLINE
 ```
 
 | File | Vai trò |
 |---|---|
-| `config.toml` | ROI, ngưỡng HSV, ngưỡng ổn định/OCR, MQTT |
-| `main.py` | Vòng lặp chính |
+| `config.toml` | Khung làn `lanes.*.roi`, ngưỡng `[presence]`, camera, MQTT |
+| `main.py` | Vòng lặp chính, nút thử trên trang preview |
+| `presence.py` | Phát hiện vật trong làn bằng so nền |
+| `cars.py` | `LotView`: danh sách xe backend gửi xuống (chỉ hiển thị) |
 | `camera.py` | Picamera2, webcam, video hoặc ảnh tĩnh |
-| `detector.py` | Màu thẻ, OCR, chuẩn hóa biển số, bộ ổn định theo làn |
-| `publisher.py` | Message đúng schema v1 (`event_id`, `boot_id`, `seq`) |
-| `preview.py` | Trang xem camera trong LAN, click lấy tọa độ ROI/HSV |
-| `mock_pi.py` | Phát kịch bản giả cho backend: `entry-ok`, `exit-ok`, `low-confidence`, `no-plate`, `wrong-lane`, `replay` |
-| `make_fixtures.py` | Sinh ảnh tổng hợp trong `fixtures/` |
+| `publisher.py` | Message đúng schema v1; subscribe danh sách xe |
+| `preview.py` | Trang `http://<ip-pi>:8000`: video có vẽ khung làn, danh sách xe, nút **Thử xe VÀO / RA**, **Chụp lại nền** |
+| `test_presence.py` | Test phát hiện vật và hiển thị danh sách: `python -m unittest test_presence` |
+| `detector.py`, `mock_pi.py`, `make_fixtures.py`, `test_detector.py` | Bản cũ (thẻ màu + OCR RapidOCR), giữ để tham khảo; `main.py` chỉ dùng `crop`/`roi_to_pixels` |
 
 ## Cài đặt trên Pi 5
 
-1. Raspberry Pi Imager → Raspberry Pi OS (64-bit) → *Edit settings*: hostname `pi-01`, user, Wi-Fi, bật SSH. Từ laptop: `ssh <user>@pi-01.local`. Muốn xem desktop: `sudo apt install rpi-connect && rpi-connect signin` rồi mở connect.raspberrypi.com, hoặc bật VNC trong `sudo raspi-config`.
+1. Raspberry Pi Imager → Raspberry Pi OS (64-bit) → *Edit settings*: hostname, user, Wi-Fi, bật SSH (Pi của nhóm: hostname `oi`, user `oi`). Từ laptop: `ssh oi@<ip-pi>`; nối dây LAN thẳng laptop thì xem [setup-guide §7.1](../../docs/setup-guide.md#71-pi-phải-ra-được-internet). Muốn xem desktop: `sudo apt install rpi-connect && rpi-connect signin` rồi mở connect.raspberrypi.com, hoặc bật VNC trong `sudo raspi-config`.
 2. Kiểm tra camera:
    ```bash
    rpicam-hello --list-cameras
@@ -44,7 +44,7 @@ Picamera2 (2304x1296, 10 fps)
    ~/venv/bin/pip install -r requirements.txt
    ~/venv/bin/python -m unittest test_detector
    ```
-4. Chạy với Mosquitto local và mở `http://pi-01.local:8000` trên laptop:
+4. Chạy với Mosquitto local và mở `http://<ip-pi>:8000` trên laptop:
    ```bash
    mosquitto_sub -v -t 'parking/#' &      # xem message được gửi
    ~/venv/bin/python main.py
@@ -52,11 +52,11 @@ Picamera2 (2304x1296, 10 fps)
 
 ## Hiệu chỉnh trên sa bàn
 
-1. Trên trang preview, click hai góc vùng làn vào/ra rồi ghi tọa độ vào `lanes.*.roi` = `[x, y, rộng, cao]`. Khung ROI hiện màu xám khi trống, xanh/đỏ khi thấy thẻ; nhãn hiện trạng thái tracker và tỉ lệ màu `G=`/`R=`.
-2. Click lên thẻ thật để đọc HSV; chỉnh `colors.*.ranges` sao cho thẻ vượt `min_card_ratio` mà mặt bãi, xe không vượt.
-3. Nếu xe luôn dừng ở cùng chỗ, đặt `plate_roi` ôm sát biển số: OCR nhanh và chính xác hơn.
-4. Biển số in một dòng, font đậm, nền trắng; trong `/snapshot.jpg` chữ cao ít nhất khoảng 30 px. Đèn chiếu ổn định, tránh lóa.
-5. Chạy thử từng kịch bản: thẻ xanh ở làn vào, thẻ đỏ ở làn ra, thẻ sai làn, che biển số. Ghi số lần đọc đúng/tổng để báo cáo.
+1. Đặt camera nhìn mặt bãi, ánh sáng ổn định. Trên trang preview, click hai góc vùng làn vào/ra rồi ghi tọa độ vào `lanes.*.roi` = `[x, y, rộng, cao]`.
+2. Khung làn: xám = `TRONG`, cam = `THAY VAT` (đang đếm frame), xanh = `DA BAO` (đã gửi lượt, chờ rút tay). Nhãn có % diện tích khác nền.
+3. Đổi chỗ/góc camera thì bỏ tay ra rồi bấm **Chụp lại nền**.
+4. Tay nhỏ so với khung → giảm `min_ratio`; báo nhầm khi không có gì → tăng `diff_threshold` hoặc `min_ratio`.
+5. Sửa `config.toml` xong khởi động lại dịch vụ (`sudo systemctl restart pi-vision`; không có quyền sudo thì `kill $(systemctl show -p MainPID --value pi-vision)`, systemd tự chạy lại).
 
 ## Kết nối AWS IoT Core
 
@@ -104,9 +104,7 @@ journalctl -u pi-vision -f
 ## Thử trên laptop không cần Pi
 
 ```bash
-pip install -r requirements.txt opencv-python-headless
-python make_fixtures.py
-python main.py --source fixtures/both.jpg --dry-run     # preview tại http://localhost:8000
-python main.py --source 0 --dry-run                     # webcam laptop
-python mock_pi.py all --dry-run                         # fixture JSON cho backend
+pip install paho-mqtt opencv-python-headless numpy
+python -m unittest test_presence
+python main.py --source 0 --dry-run                     # webcam laptop, preview tại http://localhost:8000
 ```

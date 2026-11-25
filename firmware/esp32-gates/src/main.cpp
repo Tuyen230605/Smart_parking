@@ -1,10 +1,18 @@
-// ESP32 gate-01 — 2 servo cần chắn (ENTRY/EXIT) + OLED SSD1306 128x64.
+// ESP32-S3 gate-01 — MỘT servo SG90 làm cần chắn dùng chung cho làn VÀO và RA + OLED SSD1306 (tuỳ chọn).
 // Hợp đồng: docs/mqtt-contract.md §5–§7. Hai handler riêng cho gate_command và display_command.
 //
-// Đấu nối mặc định (đổi ở khối PIN bên dưới):
-//   Servo cần VÀO  tín hiệu → GPIO18     Servo cần RA tín hiệu → GPIO19
-//   Servo VCC → nguồn 5V RIÊNG (≥2A), GND servo nối chung GND ESP32
-//   OLED SDA → GPIO21, SCL → GPIO22, VCC 3V3, GND
+// Cần chắn 1 servo, 3 vị trí:
+//   đóng (CLOSED)        → cần chỉ thẳng   (ANGLE_CENTER = 90°)
+//   mở cho xe VÀO (ENTRY) → quay TRÁI 90°   (ANGLE_ENTRY_OPEN)
+//   mở cho xe RA  (EXIT)  → quay PHẢI 90°   (ANGLE_EXIT_OPEN)
+// Backend vẫn gửi lệnh ENTRY/EXIT như hai cần; firmware ánh xạ cả hai vào một servo.
+// Lệnh mở làn này khi làn kia đang mở → làn kia báo CLOSED, cần quay sang hướng mới.
+//
+// Đấu nối (đổi ở khối PIN bên dưới):
+//   Servo dây cam/vàng (tín hiệu) → GPIO18
+//   Servo dây đỏ (VCC) → 5V (nguồn riêng ≥1A tốt nhất; 1 SG90 không tải có thể lấy chân 5V/VBUS của board)
+//   Servo dây nâu (GND) → GND ESP32 (BẮT BUỘC chung mass)
+//   OLED (nếu có) ESP32-S3: SDA → GPIO8, SCL → GPIO9 · ESP32 thường: SDA → GPIO21, SCL → GPIO22
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ESP32Servo.h>
@@ -19,11 +27,18 @@
 using namespace parking;
 
 // ── cấu hình phần cứng ─────────────────────────────────────────────────────
-static const int PIN_SERVO_ENTRY = 18;
-static const int PIN_SERVO_EXIT = 19;
-static const int ANGLE_CLOSED = 0;   // chỉnh theo cơ khí sa bàn
-static const int ANGLE_OPEN = 90;
-static const uint32_t SERVO_MOVE_MS = 700;   // thời gian servo quay hết hành trình
+static const int PIN_SERVO = 18;
+#if CONFIG_IDF_TARGET_ESP32S3
+static const int PIN_SDA = 8, PIN_SCL = 9;
+#else
+static const int PIN_SDA = 21, PIN_SCL = 22;
+#endif
+// Góc servo. Nếu lắp xong thấy quay ngược chiều (VÀO lại quay phải) thì đổi chỗ 180 ↔ 0.
+// Nếu cần không thẳng khi đóng, chỉnh ANGLE_CENTER (ví dụ 85 hoặc 95) cho khớp cơ khí.
+static const int ANGLE_CENTER = 90;
+static const int ANGLE_ENTRY_OPEN = 180;  // trái 90°
+static const int ANGLE_EXIT_OPEN = 0;     // phải 90°
+static const uint32_t SERVO_MOVE_MS = 700;   // thời gian servo quay 90° (quay 180° từ trái sang phải cũng kịp)
 static const uint32_t GATE_HOLD_MS = 5000;   // giữ mở rồi tự đóng
 static const uint32_t DISPLAY_HOLD_MS = 3000; // màn ưu tiên cao được giữ tối thiểu
 static const uint32_t IDLE_AFTER_MS = 20000;  // không có lệnh mới → về màn chờ
@@ -71,16 +86,32 @@ void onMessage(String &t, String &p) {
 enum GateState { CLOSED, OPENING, OPEN_, CLOSING, ERROR_ };
 const char *STATE_NAMES[] = {"CLOSED", "OPENING", "OPEN", "CLOSING", "ERROR"};
 
+// Hai "cần logic" ENTRY/EXIT (để báo trạng thái đúng hợp đồng) dùng chung một servo vật lý.
 struct Gate {
-  Gate(const char *n, int p) : name(n), pin(p) {}
+  Gate(const char *n, int a) : name(n), openAngle(a) {}
   const char *name;
-  int pin;
-  Servo servo;
+  int openAngle;
   GateState state = CLOSED;
   uint32_t since = 0;
   String commandId;
 };
-Gate gates[2] = {{"ENTRY", PIN_SERVO_ENTRY}, {"EXIT", PIN_SERVO_EXIT}};
+Gate gates[2] = {{"ENTRY", ANGLE_ENTRY_OPEN}, {"EXIT", ANGLE_EXIT_OPEN}};
+Servo arm;
+int armAngle = -1;
+
+bool isOpen(const Gate &g) { return g.state == OPENING || g.state == OPEN_; }
+
+// Đặt servo theo trạng thái hai cần logic: làn nào đang mở thì quay về hướng đó, còn lại chỉ thẳng.
+void updateArm() {
+  int target = ANGLE_CENTER;
+  for (auto &g : gates)
+    if (isOpen(g)) target = g.openAngle;
+  if (target != armAngle) {
+    arm.write(target);
+    armAngle = target;
+    Serial.printf("[servo] → %d°\n", target);
+  }
+}
 
 void telemetry(const char *gate, const char *state, const String &commandId, const char *errorCode = nullptr) {
   JsonDocument doc;
@@ -98,8 +129,7 @@ void telemetry(const char *gate, const char *state, const String &commandId, con
 void setGate(Gate &g, GateState s) {
   g.state = s;
   g.since = millis();
-  if (s == OPENING) g.servo.write(ANGLE_OPEN);
-  if (s == CLOSING) g.servo.write(ANGLE_CLOSED);
+  updateArm();
   Serial.printf("[gate] %s → %s\n", g.name, STATE_NAMES[s]);
   telemetry(g.name, STATE_NAMES[s], g.commandId);
 }
@@ -143,6 +173,9 @@ void handleGate(JsonDocument &doc) {
   remember(id);
   g->commandId = id;
   if (strcmp(action, "OPEN") == 0) {
+    // Chỉ một cần vật lý: làn kia đang mở thì nhường (báo CLOSED) trước khi quay sang hướng mới.
+    for (auto &other : gates)
+      if (&other != g && other.state != CLOSED) setGate(other, CLOSED);
     if (g->state == OPEN_) g->since = millis();  // đang mở: gia hạn thời gian giữ
     else setGate(*g, OPENING);
   } else if (g->state != CLOSED) {
@@ -259,12 +292,17 @@ void setup() {
   Serial.printf("\n=== gate-01 firmware %s ===\n", FIRMWARE_VERSION);
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
-  for (auto &g : gates) {
-    g.servo.setPeriodHertz(50);
-    g.servo.attach(g.pin, 500, 2400);
-    g.servo.write(ANGLE_CLOSED);  // khởi động luôn đóng cần
+  arm.setPeriodHertz(50);
+  int ch = arm.attach(PIN_SERVO, 500, 2400);  // SG90: 500 µs = 0°, 2400 µs = 180°
+  Serial.printf("[servo] attach GPIO%d → kênh %d, attached=%d\n", PIN_SERVO, ch, arm.attached());
+  // Tự kiểm tra khi khởi động: quay qua lại để nhìn là biết servo có nhận tín hiệu/nguồn hay không.
+  for (int a : {90, 150, 30, 90}) {
+    arm.write(a);
+    Serial.printf("[servo] tự kiểm tra → %d°\n", a);
+    delay(600);
   }
-  Wire.begin(21, 22);
+  updateArm();                       // khởi động luôn đóng cần (chỉ thẳng)
+  Wire.begin(PIN_SDA, PIN_SCL);
   oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   if (!oledOk) {
     Serial.println("[oled] không tìm thấy SSD1306 ở 0x3C (thử 0x3D?) — chạy tiếp không màn hình");

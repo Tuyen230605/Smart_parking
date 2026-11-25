@@ -5,7 +5,6 @@ import { useLoad } from "../../components/useLoad";
 
 const LEGEND: [string, string][] = [
   ["available", "Trống"],
-  ["reserved", "Đang giữ cho xe vừa vào"],
   ["occupied", "Có xe"],
   ["unknown", "Chưa rõ (mất kết nối cảm biến)"],
 ];
@@ -29,7 +28,7 @@ export function LayoutPage() {
         </div>
       )}
       {unknown > 0 && (
-        <div className="card warn">{unknown} ô chưa rõ trạng thái — bảng cảm biến đang mất kết nối, hệ thống tạm không gán các ô này.</div>
+        <div className="card warn">{unknown} ô chưa rõ trạng thái — bảng nút bấm đang mất kết nối, tạm không gợi ý chỗ trống.</div>
       )}
       <div className="floors">
         <FloorMap floor={1} slots={slots} />
@@ -41,7 +40,7 @@ export function LayoutPage() {
         ))}
       </div>
       <p className="muted">
-        F1-A1 dùng cảm biến khoảng cách thật; 17 ô còn lại là nút bấm mô phỏng trên sa bàn.
+        Cả 18 ô là nút bấm mô phỏng trên sa bàn.
         {updated && ` Cập nhật lúc ${new Date(updated).toLocaleTimeString("vi-VN")}.`}
       </p>
     </main>

@@ -13,12 +13,16 @@ export interface PublicLayout {
   slots: Slot[];
 }
 
+// slot_id: ô trống gần cổng nhất LÚC HỎI — chỉ là gợi ý, phiên không được gán ô. null nếu không còn/không rõ.
 export interface Claim {
   session_ref: string;
-  slot_id: string;
+  slot_id: string | null;
   route_steps: string[];
+  free_count?: number | null;
   claim_expires_at: string;
   email_submitted: boolean;
+  email_auto?: boolean; // email chỉ dẫn đã tự gửi vì biển số đã liên kết email
+  linked_email?: string | null; // email (che bớt) đang liên kết với biển số của lượt này
 }
 
 export interface EmailAccepted {
@@ -27,7 +31,8 @@ export interface EmailAccepted {
 
 export interface ActiveClaim {
   session_ref: string;
-  slot_id: string;
+  slot_id: string | null;
+  free_count?: number | null;
   claim_url: string;
   claim_expires_at: string;
   route_steps?: string[];
@@ -43,7 +48,16 @@ export interface Alert {
   session_id?: string;
 }
 
+export interface LotCar {
+  plate: string | null;
+  session_id: string;
+  session_ref?: string;
+  state: SessionState;
+  checkin_at?: string;
+}
+
 export interface AdminDashboard {
+  lot?: { in_lot: LotCar[]; pending_entry: LotCar[]; pending_exit: LotCar[] };
   available: number;
   reserved: number;
   occupied: number;
@@ -54,6 +68,7 @@ export interface AdminDashboard {
 }
 
 export type SessionState =
+  | "ENTRY_PENDING"
   | "MANUAL_REVIEW"
   | "RESERVED"
   | "PARKED"
@@ -155,7 +170,9 @@ export class ApiError extends Error {
 export interface Api {
   getLayout(): Promise<PublicLayout>;
   getClaim(token: string): Promise<Claim>;
-  submitClaimEmail(token: string, email: string, consent: boolean, idempotencyKey: string): Promise<EmailAccepted>;
+  submitClaimEmail(token: string, email: string, consent: boolean, idempotencyKey: string, slotId?: string | null, remember?: boolean): Promise<EmailAccepted>;
+  forgetClaimEmail(token: string): Promise<{ linked_email: null }>;
+  unsubscribe(token: string): Promise<{ ok: boolean }>;
   getActiveClaims(): Promise<ActiveClaim[]>;
   getDashboard(): Promise<AdminDashboard>;
   listSessions(status?: string): Promise<SessionList>;

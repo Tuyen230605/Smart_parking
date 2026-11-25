@@ -66,6 +66,7 @@ Globals:
         DEVICES_TABLE: !Ref DevicesTable
         PRICING_TABLE: !Ref PricingTable
         ALERTS_TABLE: !Ref AlertsTable
+        PLATE_EMAILS_TABLE: !Ref PlateEmailsTable
 
 Resources:
   # ── DynamoDB ──────────────────────────────────────────────────────────────
@@ -122,6 +123,15 @@ Resources:
       KeySchema: [{AttributeName: alert_id, KeyType: HASH}]
       TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
 
+  # Khách tự chọn ghi nhớ email cho biển số: lần sau xe vào (được cho phép) tự gửi chỉ dẫn. Hủy bằng link trong email.
+  PlateEmailsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub smart-parking-${Stage}-plate-emails
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: plate_normalized, AttributeType: S}]
+      KeySchema: [{AttributeName: plate_normalized, KeyType: HASH}]
+
   # ── Lambda ────────────────────────────────────────────────────────────────
   IotFunction:
     Type: AWS::Serverless::Function
@@ -137,12 +147,14 @@ Resources:
         - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
         - DynamoDBReadPolicy: {TableName: !Ref PricingTable}
         - DynamoDBCrudPolicy: {TableName: !Ref AlertsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref PlateEmailsTable}
         - Statement:
             - Effect: Allow
               Action: iot:Publish
               Resource:
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/gates/gate-01/commands
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/displays/gate-01/commands
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/vision/pi-01/lot
       Events:
         DeviceMessages:
           Type: IoTRule
@@ -150,7 +162,7 @@ Resources:
             AwsIotSqlVersion: "2016-03-23"
             Sql: >-
               SELECT *, topic() AS mqtt_topic FROM 'parking/v1/site-01/#'
-              WHERE message_type <> 'gate_command' AND message_type <> 'display_command'
+              WHERE message_type <> 'gate_command' AND message_type <> 'display_command' AND message_type <> 'lot_state'
 
   ApiFunction:
     Type: AWS::Serverless::Function
@@ -166,12 +178,14 @@ Resources:
         - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
         - DynamoDBCrudPolicy: {TableName: !Ref PricingTable}
         - DynamoDBCrudPolicy: {TableName: !Ref AlertsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref PlateEmailsTable}
         - Statement:
             - Effect: Allow
               Action: iot:Publish
               Resource:
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/gates/gate-01/commands
                 - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/displays/gate-01/commands
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/vision/pi-01/lot
             - Effect: Allow
               Action: [ses:SendEmail, ses:SendRawEmail]
               Resource: "*"
@@ -181,6 +195,8 @@ Resources:
         PublicLayout: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/public/layout, Auth: {Authorizer: NONE}}}
         PublicClaim: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: "/v1/public/claims/{token}", Auth: {Authorizer: NONE}}}
         PublicClaimEmail: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/public/claims/{token}/email", Auth: {Authorizer: NONE}}}
+        PublicClaimForget: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/public/claims/{token}/forget-email", Auth: {Authorizer: NONE}}}
+        PublicUnsubscribe: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: POST, Path: "/v1/public/unsubscribe/{token}", Auth: {Authorizer: NONE}}}
         KioskClaims: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/kiosk/active-claims}}
         AdminDashboard: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/admin/dashboard}}
         AdminSessions: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Method: GET, Path: /v1/admin/sessions}}
@@ -210,6 +226,12 @@ Resources:
         - DynamoDBCrudPolicy: {TableName: !Ref DevicesTable}
         - DynamoDBCrudPolicy: {TableName: !Ref PricingTable}
         - DynamoDBCrudPolicy: {TableName: !Ref AlertsTable}
+        - DynamoDBCrudPolicy: {TableName: !Ref PlateEmailsTable}
+        - Statement:
+            - Effect: Allow
+              Action: iot:Publish
+              Resource:
+                - !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/parking/v1/site-01/vision/pi-01/lot
       Events:
         Monitor:
           Type: Schedule
