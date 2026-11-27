@@ -1,110 +1,77 @@
-# Raspberry Pi 5: camera phát hiện xe ở làn vào/ra
+# Raspberry Pi 5: phát hiện xe ở làn vào, làn ra
 
-Bản demo **không dùng thẻ màu hay biển in**. Một camera nhìn hai khung làn (mặc định nửa trái = `ENTRY`, nửa phải = `EXIT`). Pi so mỗi khung với ảnh nền trống; khi có vật (bàn tay, xe mô hình) che vào đủ lâu thì publish **một** `vehicle_detected` (`plate_text = null`) theo [MQTT v1](../../docs/mqtt-contract.md). Backend đánh biển demo (`11111`, `22222`…), chờ quản trị bấm **Cho vào / Cho ra** trên web rồi mới mở cần, và gửi lại **danh sách xe trong bãi** để trang camera hiển thị. Pi không tự mở cần, không giữ danh sách riêng.
+Chương trình `pi-vision` chạy trên Pi. Camera nhìn hai làn: nửa trái khung hình là làn vào, nửa phải là làn ra. Khi có vật (bàn tay, xe mô hình) che vào một làn đủ lâu, Pi gửi một tin "có xe" lên AWS IoT Core. Pi không đọc biển số, không tự mở cần. Biển số demo do đám mây cấp, và đám mây gửi lại danh sách xe để Pi hiện lên trang camera.
 
-Ảnh chỉ xử lý trong RAM, không upload cloud.
+Ảnh chỉ xử lý trong bộ nhớ, không gửi lên mạng.
 
-## Pipeline
+## Cách phát hiện xe
 
-```text
-Picamera2 (1920x1080 cho OV5647, 10 fps)
-  → mỗi khung làn: thu nhỏ, xám, làm mờ; so với ảnh nền (bù chênh sáng toàn khung)   (presence.LanePresence)
-  → tỉ lệ điểm ảnh khác nền ≥ min_ratio trong stable_frames frame → báo 1 lượt
-  → phải trống clear_frames frame (và cách cooldown_s) mới nhận lượt mới; vật nằm yên > absorb_after_s thì nhập vào nền
-  → publish vehicle_detected (QoS 1): ENTRY+GREEN / EXIT+RED, plate_text = null
-  → subscribe parking/v1/site-01/vision/pi-01/lot ← backend gửi danh sách xe (trong bãi / chờ vào / chờ ra)
-  → device_status mỗi 30 giây, Last Will OFFLINE
-```
+Mỗi giây chương trình xử lý 10 khung hình. Với từng làn:
 
-| File | Vai trò |
+1. Cắt vùng làn, thu nhỏ, chuyển sang ảnh xám, làm mờ nhẹ.
+2. So với ảnh nền lúc làn trống (có bù chênh lệch độ sáng chung).
+3. Nếu từ 8% diện tích làn trở lên khác nền trong 3 khung liên tiếp thì báo một lượt.
+4. Làn phải trống 8 khung liên tiếp (và cách lượt trước ít nhất 3 giây) mới báo lượt tiếp theo. Vật nằm yên quá 15 giây được tính vào nền.
+
+## Các tệp
+
+| Tệp | Nội dung |
 |---|---|
-| `config.toml` | Khung làn `lanes.*.roi`, ngưỡng `[presence]`, camera, MQTT |
-| `main.py` | Vòng lặp chính, nút thử trên trang preview |
-| `presence.py` | Phát hiện vật trong làn bằng so nền |
-| `cars.py` | `LotView`: danh sách xe backend gửi xuống (chỉ hiển thị) |
-| `camera.py` | Picamera2, webcam, video hoặc ảnh tĩnh |
-| `publisher.py` | Message đúng schema v1; subscribe danh sách xe |
-| `preview.py` | Trang `http://<ip-pi>:8000`: video có vẽ khung làn, danh sách xe, nút **Thử xe VÀO / RA**, **Chụp lại nền** |
-| `test_presence.py` | Test phát hiện vật và hiển thị danh sách: `python -m unittest test_presence` |
-| `detector.py`, `mock_pi.py`, `make_fixtures.py`, `test_detector.py` | Bản cũ (thẻ màu + OCR RapidOCR), giữ để tham khảo; `main.py` chỉ dùng `crop`/`roi_to_pixels` |
+| `main.py` | Vòng lặp chính |
+| `presence.py` | Phát hiện vật bằng so ảnh nền |
+| `cars.py` | Giữ danh sách xe do đám mây gửi xuống để hiển thị |
+| `camera.py` | Đọc ảnh từ camera Pi, webcam hoặc tệp ảnh. Không có camera thì vẫn chạy |
+| `publisher.py` | Gửi, nhận tin nhắn MQTT |
+| `preview.py` | Trang camera ở cổng 8000 |
+| `settings.py` | Đọc `config.toml`, ghi đè bằng `config.local.toml` |
+| `config.toml` | Vùng làn, độ nhạy, camera, MQTT |
+| `test_presence.py` | Kiểm thử: `python -m unittest test_presence` |
+| `install-pi.sh` | Cài thư viện và dịch vụ `pi-vision` |
 
-## Cài đặt trên Pi 5
+`config.local.toml` do `infra/aws/provision-devices.sh` sinh ra, chứa địa chỉ IoT Core và đường dẫn chứng chỉ. Tệp này không được commit.
 
-1. Raspberry Pi Imager → Raspberry Pi OS (64-bit) → *Edit settings*: hostname, user, Wi-Fi, bật SSH (Pi của nhóm: hostname `oi`, user `oi`). Từ laptop: `ssh oi@<ip-pi>`; nối dây LAN thẳng laptop thì xem [setup-guide §7.1](../../docs/setup-guide.md#71-pi-phải-ra-được-internet). Muốn xem desktop: `sudo apt install rpi-connect && rpi-connect signin` rồi mở connect.raspberrypi.com, hoặc bật VNC trong `sudo raspi-config`.
-2. Kiểm tra camera:
-   ```bash
-   rpicam-hello --list-cameras
-   rpicam-still -o test.jpg
-   ```
-3. Cài môi trường:
-   ```bash
-   sudo apt update && sudo apt install -y git python3-picamera2 python3-opencv mosquitto mosquitto-clients
-   git clone <repo> ~/Cloud-Course && cd ~/Cloud-Course/edge/raspberry-pi-vision
-   python3 -m venv --system-site-packages ~/venv
-   ~/venv/bin/pip install -r requirements.txt
-   ~/venv/bin/python -m unittest test_detector
-   ```
-4. Chạy với Mosquitto local và mở `http://<ip-pi>:8000` trên laptop:
-   ```bash
-   mosquitto_sub -v -t 'parking/#' &      # xem message được gửi
-   ~/venv/bin/python main.py
-   ```
+## Cài đặt
 
-## Hiệu chỉnh trên sa bàn
+Cách nhanh nhất, chạy trên laptop: `cd infra/aws && ./setup-pi.sh oi@<ip-pi>`. Script lấy mã nguồn, chép chứng chỉ, chạy `install-pi.sh` và bật dịch vụ.
 
-1. Đặt camera nhìn mặt bãi, ánh sáng ổn định. Trên trang preview, click hai góc vùng làn vào/ra rồi ghi tọa độ vào `lanes.*.roi` = `[x, y, rộng, cao]`.
-2. Khung làn: xám = `TRONG`, cam = `THAY VAT` (đang đếm frame), xanh = `DA BAO` (đã gửi lượt, chờ rút tay). Nhãn có % diện tích khác nền.
-3. Đổi chỗ/góc camera thì bỏ tay ra rồi bấm **Chụp lại nền**.
-4. Tay nhỏ so với khung → giảm `min_ratio`; báo nhầm khi không có gì → tăng `diff_threshold` hoặc `min_ratio`.
-5. Sửa `config.toml` xong khởi động lại dịch vụ (`sudo systemctl restart pi-vision`; không có quyền sudo thì `kill $(systemctl show -p MainPID --value pi-vision)`, systemd tự chạy lại).
-
-## Kết nối AWS IoT Core
-
-Tạo Thing `pi-01` (thường do người 4 làm, Pi chỉ cần ba file):
+Làm tay trên Pi:
 
 ```bash
-aws iot create-thing --thing-name pi-01
-aws iot create-keys-and-certificate --set-as-active \
-  --certificate-pem-outfile pi-01.cert.pem --private-key-outfile pi-01.private.key
-aws iot create-policy --policy-name pi-01-policy --policy-document file://policy.json
-aws iot attach-policy --policy-name pi-01-policy --target <certificateArn>
-aws iot attach-thing-principal --thing-name pi-01 --principal <certificateArn>
-aws iot describe-endpoint --endpoint-type iot:Data-ATS
-curl -o AmazonRootCA1.pem https://www.amazontrust.com/repository/AmazonRootCA1.pem
+git clone https://github.com/Tuyen230605/Smart_parking.git ~/Cloud-Course
+cd ~/Cloud-Course/edge/raspberry-pi-vision
+./install-pi.sh                 # cài thư viện, tạo dịch vụ pi-vision và bật luôn
+journalctl -u pi-vision -f      # phải thấy "Đã kết nối MQTT"
 ```
 
-`policy.json` chỉ cho `pi-01` kết nối và publish hai topic của mình:
+Chứng chỉ được chép từ laptop bằng `infra/aws/copy-pi-certs.sh oi@<ip-pi>`. Dịch vụ tự chạy mỗi khi bật Pi.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow", "Action": "iot:Connect", "Resource": "arn:aws:iot:<region>:<account>:client/pi-01"},
-    {"Effect": "Allow", "Action": "iot:Publish", "Resource": [
-      "arn:aws:iot:<region>:<account>:topic/parking/v1/site-01/vision/pi-01/events",
-      "arn:aws:iot:<region>:<account>:topic/parking/v1/site-01/devices/pi-01/status"
-    ]}
-  ]
-}
-```
+## Trang camera
 
-Chép cert vào `/etc/parking/certs/` (ngoài repo, `chmod 600` file key), rồi sửa `[mqtt]`: `host` = endpoint ATS, `port = 8883`, `tls = true`. Kiểm tra bằng MQTT test client trên AWS Console, subscribe `parking/v1/site-01/#`.
+Mở `http://<ip-pi>:8000` trên máy cùng mạng với Pi. Trang có:
 
-## Chạy tự động khi khởi động (cùng Pi với Smart Lighting)
+- Hình camera với hai khung làn: xám là trống, cam là đang thấy vật, xanh là đã báo lượt.
+- Danh sách xe trong bãi, xe chờ vào, xe chờ ra (lấy từ đám mây).
+- Nút *Thử xe VÀO*, *Thử xe RA*: gửi đúng loại tin như camera, dùng khi chưa đặt camera.
+- Nút *Chụp lại nền*: bấm sau khi đổi góc camera (nhớ bỏ tay ra khỏi khung).
 
-```bash
-./install-pi.sh            # apt + venv ~/venv-parking + unit pi-vision theo user hiện tại
-./pi-mode.sh parking       # dừng container vision của Lighting (giữ camera), bật pi-vision
-./pi-mode.sh lighting      # trả camera cho Lighting
-journalctl -u pi-vision -f
-```
+Nếu camera chưa cắm hoặc cáp lỏng, trang vẫn chạy và hiện dòng "không có hình".
 
-`config.local.toml` (do `infra/aws/provision-devices.sh` sinh, `infra/aws/copy-pi-certs.sh` chép sang) ghi đè `[mqtt]` của `config.toml` để nối AWS IoT. Mạng chặn 8883 thì đặt `port = 443` (dùng ALPN). Xem [setup-guide](../../docs/setup-guide.md#7-pi-5-nhường-camera-và-nối-aws).
+## Chỉnh cho đúng sa bàn
 
-## Thử trên laptop không cần Pi
+1. Bấm lên ảnh để xem tọa độ, rồi sửa `lanes.ENTRY.roi` và `lanes.EXIT.roi` trong `config.toml` theo dạng `[x, y, rộng, cao]` (giá trị 0–1).
+2. Tay nhỏ so với khung làn thì giảm `min_ratio`. Báo nhầm khi không có gì thì tăng `diff_threshold` hoặc `min_ratio`.
+3. Sửa xong thì khởi động lại dịch vụ: `sudo systemctl restart pi-vision`.
+
+## Thử trên laptop
 
 ```bash
 pip install paho-mqtt opencv-python-headless numpy
 python -m unittest test_presence
-python main.py --source 0 --dry-run                     # webcam laptop, preview tại http://localhost:8000
+python main.py --source 0 --dry-run   # dùng webcam, không gửi lên AWS, trang tại http://localhost:8000
 ```
+
+## Sự cố
+
+- Không có hình, log báo `Camera frontend has timed out`: tắt Pi, cắm lại cáp camera cho chặt. Pi 5 cần cáp 22 sang 15 chân, mặt có chân kim loại quay về phía cổng HDMI.
+- Pi tự tắt sau vài phút: cáp camera lỏng hoặc nguồn yếu. Dùng nguồn 5 V/5 A.
+- Kiểm tra Pi có thiếu điện không: `vcgencmd get_throttled` (kết quả `0x0` là ổn).

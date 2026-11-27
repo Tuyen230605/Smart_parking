@@ -1,0 +1,179 @@
+\chapter{Giải pháp và kế hoạch}
+
+Chương này so sánh các phương án, trình bày lựa chọn của nhóm, cách mỗi yêu cầu được đáp ứng, chi phí ước tính, kế hoạch và rủi ro.
+
+\section{Chọn mô hình đám mây}
+
+\begin{table}[H]
+\centering
+\caption{So sánh đám mây công cộng AWS và đám mây riêng OpenStack}
+\label{tab:awsvsos}
+\begin{tabularx}{\textwidth}{@{}P{3.3cm}LL@{}}
+\toprule
+\textbf{Tiêu chí} & \textbf{AWS (công cộng)} & \textbf{OpenStack (riêng)} \\ \midrule
+Đầu tư ban đầu & Không cần mua máy chủ & Cần cụm máy chủ, thiết bị mạng, ổ lưu trữ \\
+Người vận hành & AWS quản lý hạ tầng & Cần kỹ sư vận hành cụm OpenStack \\
+Dịch vụ IoT có sẵn & AWS IoT Core nhận tin nhắn MQTT, quản lý chứng chỉ thiết bị & Phải tự dựng máy chủ MQTT và tự quản lý chứng chỉ \\
+Cách tính chi phí & Dùng bao nhiêu trả bấy nhiêu, có gói miễn phí và tín dụng & Chi phí cố định (điện, khấu hao máy) \\
+Độ sẵn sàng & AWS lo dự phòng & Phụ thuộc phần cứng tự có \\
+Kiểm soát dữ liệu & Dữ liệu nằm ở vùng đã chọn & Toàn quyền tại chỗ \\
+\midrule
+Kết luận & \multicolumn{2}{p{10.5cm}}{Chọn AWS: không cần máy chủ và người vận hành (M5). Có sẵn dịch vụ IoT. Chi phí ở mức demo nằm trong phần tín dụng.} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Chọn kiến trúc và dịch vụ}
+
+\subsection{Không máy chủ hay máy ảo}
+
+Phương án máy ảo (EC2): một máy ảo chạy máy chủ MQTT, API và cơ sở dữ liệu. Cách này dễ hình dung. Nhưng máy phải chạy cả ngày dù bãi vắng, phải tự vá hệ điều hành, tự sao lưu và tự xử lý khi máy hỏng.
+
+Phương án không máy chủ (serverless): AWS IoT Core nhận tin nhắn từ thiết bị, hàm Lambda xử lý, dữ liệu lưu ở DynamoDB, web gọi qua API Gateway. Không có máy chủ nào phải quản lý. Hệ thống tự co giãn và tính tiền theo số tin nhắn, số lần gọi. Với lưu lượng nhỏ của một bãi xe, chi phí gần như bằng không.
+
+Nhóm chọn phương án không máy chủ.
+
+\subsection{Lựa chọn từng thành phần}
+
+\begin{longtable}{@{}P{2.8cm}P{3.6cm}P{3.2cm}P{4.6cm}@{}}
+\caption{Lựa chọn dịch vụ cho từng thành phần}\label{tab:quyetdinh}\\
+\toprule
+\textbf{Thành phần} & \textbf{Chọn} & \textbf{Không chọn} & \textbf{Lý do} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Thành phần} & \textbf{Chọn} & \textbf{Không chọn} & \textbf{Lý do} \\ \midrule
+\endhead
+Kết nối thiết bị & AWS IoT Core & Máy chủ MQTT tự dựng trên EC2 & Không phải vận hành máy chủ; phân quyền riêng cho từng thiết bị \\
+Xử lý nghiệp vụ & AWS Lambda (Python 3.12, chip ARM) & Ứng dụng chạy trên EC2 & Trả tiền theo số lần gọi; chip ARM rẻ hơn \\
+Cơ sở dữ liệu & DynamoDB, trả theo mức dùng & Amazon RDS & Không có máy chủ cơ sở dữ liệu chạy cả ngày; hỗ trợ ghi có điều kiện và tự xóa bản ghi hết hạn \\
+Phát hiện xe & Xử lý ảnh ngay trên Pi (OpenCV) & Gửi ảnh lên Amazon Rekognition & Không gửi ảnh lên mạng nên riêng tư hơn, đỡ tốn băng thông và chi phí \\
+Thông báo cho khách & Mã QR và email qua Amazon SES & Tin nhắn SMS & SMS tốn phí mỗi tin; email là đủ để gửi hướng dẫn \\
+Đăng nhập quản trị & Amazon Cognito & Tự viết chức năng đăng nhập & Dùng chuẩn có sẵn; API Gateway tự kiểm tra người dùng \\
+Phát hành web & S3 riêng tư + CloudFront & Thuê máy chủ web & Có HTTPS miễn phí; kho lưu trữ không mở công khai \\
+Tác vụ định kỳ & EventBridge (mỗi phút, mỗi giờ) & Lịch chạy trên máy ảo & Không cần máy chủ \\
+Dựng hạ tầng & CloudFormation qua AWS CLI & Bấm tay trên giao diện web & Làm lại được, gỡ sạch được, dễ bàn giao \\
+Vùng đặt hạ tầng & Singapore (\code{ap-southeast-1}) & Mỹ (\code{us-east-1}) & Gần Việt Nam, có đủ dịch vụ cần dùng \\
+\bottomrule
+\end{longtable}
+
+\section{Yêu cầu và giải pháp tương ứng}
+
+\begin{longtable}{@{}P{2.4cm}P{6.6cm}P{5.1cm}@{}}
+\caption{Yêu cầu và giải pháp tương ứng}\label{tab:anhxa}\\
+\toprule
+\textbf{Yêu cầu} & \textbf{Giải pháp} & \textbf{Dịch vụ, thành phần} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Yêu cầu} & \textbf{Giải pháp} & \textbf{Dịch vụ, thành phần} \\ \midrule
+\endhead
+FR-01 & Pi so từng vùng làn với ảnh nền trống. Thấy vật đủ lâu thì gửi một sự kiện lên đám mây. & Raspberry Pi 5, OpenCV, AWS IoT Core \\
+FR-02, NFR-06 & Lượt chờ vào, chờ ra hiện trên trang quản trị. Khi nhân viên bấm \emph{Cho vào}, hệ thống chuyển trạng thái phiên đỗ và khóa biển số trong một thao tác. & Lambda, DynamoDB, web \\
+FR-03 & Đám mây gửi lệnh mở cần xuống bo mạch cổng. Một servo quay trái hoặc phải. Bo mạch báo lại trạng thái. & IoT Core, ESP32-S3 \\
+FR-04, FR-05 & Link QR có chữ ký, hạn 15 phút. Web vẽ bản đồ và đường đi. Mỗi phiên đỗ gửi tối đa một email. Có bảng lưu email khách chọn ghi nhớ. & API Gateway, Lambda, SES, CloudFront, DynamoDB \\
+FR-06, FR-13 & 18 nút giả lập cảm biến. Bo mạch gửi thay đổi ngay và gửi trạng thái đủ 18 ô mỗi 30 giây. & ESP32, IoT Core, DynamoDB \\
+FR-07, FR-08 & Hàm tính tiền theo bảng giá trong cơ sở dữ liệu. API ghi nhận đã thu tiền. & Lambda, DynamoDB \\
+FR-09, FR-10 & Lambda cấp biển số demo. Danh sách xe được gửi xuống Pi. Trang quản trị có nút cho vào, cho ra và ghi lại ai đã thao tác. & Lambda, IoT Core, web, Cognito \\
+FR-11 & Tác vụ giám sát chạy mỗi phút. & EventBridge, Lambda \\
+FR-12, NFR-04 & Tác vụ dọn dữ liệu mỗi giờ, kèm tự xóa bản ghi hết hạn. Log giữ 7 ngày, không ghi thông tin cá nhân. & EventBridge, DynamoDB, CloudWatch \\
+NFR-01 & Kiến trúc không máy chủ, trả theo mức dùng, có cảnh báo chi phí. & AWS Budgets \\
+NFR-02 & Mỗi thiết bị có chứng chỉ và quyền riêng, chỉ dùng được kênh tin nhắn của mình. & IoT Core \\
+NFR-05 & Mỗi tin nhắn và lệnh có mã riêng để bỏ bản trùng. Lệnh hết hạn sau 5 giây. & Lambda, ESP32 \\
+NFR-08 & Toàn bộ hạ tầng khai báo trong \code{template.yaml}, dựng và gỡ bằng script. & CloudFormation, AWS CLI \\
+NFR-09 & Cho phép kết nối MQTT qua cổng 443. & IoT Core \\
+\bottomrule
+\end{longtable}
+
+\section{Ước tính chi phí}
+
+\subsection{Giả định tải}
+
+Nhóm giả định bãi mở 12 giờ mỗi ngày, 30 ngày mỗi tháng, với các con số sau:
+\begin{itemize}
+  \item 1.000 lượt vào và 1.000 lượt ra; 500 email hướng dẫn.
+  \item Bo mạch đọc nút gửi trạng thái 18 ô mỗi 30 giây; 3 thiết bị gửi tin báo còn sống mỗi 30 giây. Tổng khoảng 350 nghìn tin nhắn mỗi tháng.
+  \item Màn hình ở cổng hỏi API mỗi 2 giây: khoảng 650 nghìn lần mỗi tháng.
+  \item Một màn hình quản trị mở cả ngày, hỏi 2 API mỗi 3 giây: khoảng 860 nghìn lần mỗi tháng.
+\end{itemize}
+Như vậy API Gateway nhận khoảng 1,5 triệu yêu cầu mỗi tháng. Lambda chạy khoảng 2 triệu lần, tính cả tin nhắn từ thiết bị và tác vụ định kỳ.
+
+\subsection{Chi phí đám mây theo dịch vụ}
+
+\begin{longtable}{@{}P{3.2cm}P{5.4cm}P{5.5cm}@{}}
+\caption{Ước tính chi phí AWS mỗi tháng}\label{tab:chiphi}\\
+\toprule
+\textbf{Dịch vụ} & \textbf{Khối lượng ước tính} & \textbf{Chi phí} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Dịch vụ} & \textbf{Khối lượng} & \textbf{Chi phí} \\ \midrule
+\endhead
+API Gateway & Khoảng 1,5 triệu yêu cầu & Khoảng 1,5 USD (giá khoảng 1 USD mỗi triệu yêu cầu) \\
+DynamoDB & Khoảng 1,5 triệu lần đọc nhỏ, vài nghìn lần ghi & Khoảng 0,5--1,5 USD; phần lưu trữ nằm trong gói miễn phí \\
+IoT Core & Khoảng 350 nghìn tin nhắn; 3 thiết bị kết nối liên tục & Dưới 0,5 USD \\
+Lambda & Khoảng 2 triệu lần chạy, 256 MB & Khoảng 0,2 USD (1 triệu lần đầu miễn phí) \\
+SES & 500 email & Vài cent \\
+S3 + CloudFront & Web tĩnh vài MB & Gần như 0 \\
+Cognito, EventBridge, Budgets & Vài tài khoản; 44 nghìn lần chạy định kỳ; 1 ngân sách & Trong gói miễn phí \\
+CloudWatch Logs & Log Lambda giữ 7 ngày & Vài cent \\
+\midrule
+Tổng & & Khoảng 3--5 USD mỗi tháng ở mức tải trên. Phần lớn đến từ việc màn hình hỏi API liên tục. Nếu chỉ chạy demo vài giờ mỗi ngày thì thấp hơn nhiều. \\
+\bottomrule
+\end{longtable}
+
+\begin{ghichu}[Lưu ý về số liệu chi phí]
+Đây là ước tính, không phải báo giá. Giá AWS thay đổi theo thời gian, vùng và loại tài khoản. Trước khi dùng cho bãi thật cần nhập tải thực tế vào công cụ AWS Pricing Calculator. Chi phí thực tế của đợt triển khai (từ 1/11 đến 27/11/2026, chủ yếu chạy demo) là khoảng 0,09 USD và đã được tín dụng trừ hết (Bảng~\ref{tab:solieu}).
+\end{ghichu}
+
+\subsection{Chi phí phần cứng}
+
+Nhóm đã có sẵn Raspberry Pi 5, camera và phần lớn linh kiện. Nếu mua mới toàn bộ, phần cứng cho sa bàn tốn khoảng 6--8 triệu đồng: Pi~5, camera, một ESP32-S3, một ESP32, 18 nút nhấn, một servo, nguồn, thẻ nhớ và vật liệu làm sa bàn. Con số này chưa gồm VAT và màn hình ở cổng.
+
+\section{Kế hoạch triển khai}
+
+\begin{table}[H]
+\centering
+\caption{Kế hoạch và mốc thực hiện}
+\label{tab:kehoach}
+\begin{tabularx}{\textwidth}{@{}P{1cm}P{3.8cm}LP{2.4cm}@{}}
+\toprule
+\textbf{GĐ} & \textbf{Giai đoạn} & \textbf{Kết quả} & \textbf{Mốc} \\ \midrule
+1 & Khởi động, khảo sát & Khung dự án, tài liệu yêu cầu, sơ đồ bãi 18 ô & 30/09/2026 \\
+2 & Phân tích yêu cầu, đề xuất giải pháp & Kiến trúc, quy ước giao tiếp giữa thiết bị, web và đám mây, chi phí ước tính & 05/10/2026 \\
+3 & Phát triển phần thiết bị và web & Phần mềm trên Pi, ứng dụng web & 27/10/2026 \\
+4 & Phát triển phần đám mây, tích hợp & Template CloudFormation, 3 hàm Lambda, chương trình mô phỏng 2 ESP32, phần mềm ESP32, script triển khai & 08/11/2026 \\
+5 & Triển khai AWS, kiểm thử tích hợp & Hệ thống chạy trên AWS, kiểm thử đầu cuối & 14/11/2026 \\
+6 & Lắp thiết bị thật & Pi, camera và hai bo mạch ESP32 kết nối AWS, chạy thử trọn luồng & 27/11/2026 \\
+7 & Nghiệm thu, bàn giao & Bảng kiểm nghiệm thu, tài liệu vận hành & Buổi bảo vệ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Rủi ro và cách xử lý}
+
+\begin{longtable}{@{}P{4.4cm}P{1.6cm}P{8.1cm}@{}}
+\caption{Rủi ro và cách xử lý}\label{tab:ruiro}\\
+\toprule
+\textbf{Rủi ro} & \textbf{Mức} & \textbf{Cách xử lý} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Rủi ro} & \textbf{Mức} & \textbf{Cách xử lý} \\ \midrule
+\endhead
+Camera báo nhầm do ánh sáng, bóng người & Trung bình & Mọi lượt vẫn do nhân viên cho phép. Trang camera cho chỉnh vùng làn, độ nhạy và chụp lại ảnh nền \\
+Mạng chặn cổng 8883 & Trung bình & Kết nối MQTT qua cổng 443 \\
+Chi phí vượt dự kiến & Thấp & Kiến trúc không máy chủ; AWS Budgets cảnh báo ở 5 USD; script gỡ toàn bộ hạ tầng \\
+SES chưa gửi được cho email bất kỳ & Trung bình & Thử với địa chỉ đã xác minh; xin quyền dùng thật khi triển khai cho bãi thật \\
+Tin nhắn lặp làm mở cần hai lần & Trung bình & Bỏ bản trùng theo mã tin nhắn ở cả đám mây và ESP32; lệnh hết hạn sau 5 giây \\
+Lộ chứng chỉ, khóa bí mật & Cao & Không đưa vào kho mã nguồn; chép sang Pi qua SSH; chỉ chủ tệp được đọc \\
+Thiết bị mất kết nối & Trung bình & Phát hiện sau 90 giây; ô chuyển sang \emph{không rõ}, không gợi ý theo dữ liệu cũ \\
+Servo không có điện (chân \code{5Vin} của ESP32-S3 không cấp điện ra) & Trung bình & Bo mạch quay thử servo khi khởi động; cấp 5~V riêng cho servo, nối chung GND \\
+\bottomrule
+\end{longtable}
+
+\section{Phạm vi và tiêu chí nghiệm thu}
+\label{sec:nghiemthu}
+
+\begin{itemize}
+  \item Trong phạm vi: FR-01 đến FR-13, NFR-01 đến NFR-10 ở Chương~2; kiến trúc không máy chủ trên AWS vùng Singapore. Giai đoạn đầu dùng chương trình mô phỏng hai ESP32, sau đó nạp phần mềm thật cho bo mạch.
+  \item Ngoài phạm vi: thanh toán trực tuyến, ứng dụng di động, SMS, Rekognition, nhiều bãi, cảm biến xe qua cổng, đọc biển số thật.
+  \item Tiêu chí nghiệm thu: chạy trọn một vòng vào, chỉ đường, ra trên AWS; đạt các kịch bản SIM-01 đến SIM-16 (Chương~6); có tài liệu và buổi hướng dẫn sử dụng (Chương~7).
+  \item Ngân sách đám mây: nằm trong phần tín dụng; cảnh báo khi chi phí tháng vượt 5 USD.
+\end{itemize}

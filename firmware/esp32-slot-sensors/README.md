@@ -1,15 +1,22 @@
-# ESP32 ô: một cảm biến và 17 nút
+# ESP32 `slots-01`: 18 nút giả lập cảm biến ô
 
-Board `slots-01` đọc cảm biến ToF thật ở `F1-A1` và 17 nút bấm giả lập các ô còn lại theo [bảng ánh xạ](../../docs/parking-layout.md). Hai MCP23017 I²C mở rộng chân. Mỗi nút nhấn hợp lệ đảo `occupied`; lưu trạng thái giả lập trong NVS.
+Mỗi ô có một nút. Nhấn một lần là ô đổi giữa trống và có xe. Bo mạch gửi thay đổi lên AWS IoT Core ngay, và gửi trạng thái đủ 18 ô khi khởi động, khi kết nối lại và mỗi 30 giây. Trạng thái được lưu trong bộ nhớ của chip nên không mất khi mất điện.
 
-Firmware gửi `slot_changed` ngay khi đổi và `slots_snapshot` đủ 18 ô lúc boot/reconnect, sau đó mỗi 30 giây. Phân biệt `source=SENSOR|BUTTON`, debounce input và dùng [MQTT v1](../../docs/mqtt-contract.md).
+Trạng thái ô chỉ dùng để chỉ chỗ trống trên web. Nó không ảnh hưởng tới phiên đỗ hay tiền.
 
-## Code và nạp
+## Nối dây
 
-`src/main.cpp` (ngưỡng ToF `TOF_OCCUPIED_MM`/`TOF_FREE_MM`, debounce 50 ms, snapshot 30 s), `../common/parking_net.h`. `include/secrets.h` do `infra/aws/provision-devices.sh` sinh — không commit.
+Mỗi nút một chân vào GPIO, chân kia vào GND. Không cần điện trở. Bảng chân cho từng ô ở [docs/parking-layout.md](../../docs/parking-layout.md). Ví dụ ô F1-A1 nối GPIO25, F1-A2 nối GPIO26, F1-A3 nối GPIO27. Chân chưa cắm nút thì ô luôn trống.
+
+Không giữ nút của ô F2-C2 và F2-C3 (GPIO15 và GPIO12) đúng lúc cắm điện.
+
+## Nạp
 
 ```bash
-cd firmware/esp32-slot-sensors && pio run -t upload && pio device monitor
+cd firmware/esp32-slot-sensors
+pio run -t upload && pio device monitor
 ```
 
-Đấu nối: bus I²C SDA21/SCL22 ở 3,3 V; MCP23017 0x20 (A0–A2 = GND) GPA0..GPB7 = nút B1..B16, MCP23017 0x21 (A0 = VCC) GPA0 = B17; mỗi nút nối chân MCP ↔ GND (pull-up trong). VL53L0X 0x29 nhìn xuống F1-A1; đọc `[tof] mm=…` trên Serial để chỉnh ngưỡng. Trạng thái 17 nút lưu NVS, F1-A1 luôn đọc lại từ cảm biến.
+Log phải có `✓ đã kết nối AWS IoT` và `snapshot 18 ô`. Wi-Fi và chứng chỉ nằm trong `include/secrets.h` (không commit).
+
+Bo mạch khởi động lại liên tục và log báo `Brownout` là do thiếu điện: cắm bo vào một nguồn USB riêng, không dùng chung cổng với bo khác.

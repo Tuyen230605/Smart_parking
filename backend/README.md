@@ -1,23 +1,34 @@
-# Backend nghiệp vụ
+# Backend
 
-AWS Lambda nhận sự kiện IoT Core và API web, quản lý phiên (chờ vào → trong bãi → chờ ra → đóng, quản trị cho phép từng bước), đánh biển số demo, gợi ý ô trống, tạo QR token, tính phí mô phỏng, phát lệnh cần, gửi danh sách xe cho Pi và gọi Amazon SES. Dữ liệu ở DynamoDB. Xem [kiến trúc](../docs/architecture.md), [use case](../docs/use-cases.md), [API](../docs/api-contract.md).
+Mã Python cho 3 hàm Lambda. Backend là nơi duy nhất ra quyết định: tạo phiên đỗ, cấp biển số demo, tính tiền, gửi lệnh mở cần, gửi email và gửi danh sách xe cho Pi. Dữ liệu lưu ở DynamoDB.
 
-Backend là nơi duy nhất phát lệnh servo, không coi ACK mở cần là xác nhận xe qua cổng. Email mặc định chỉ thuộc lượt hiện tại; chỉ khi khách tự tích "ghi nhớ" mới lưu liên kết biển số→email (bảng `PlateEmails`, hủy bằng link trong email). Mọi sự kiện/lệnh/API mutation xử lý retry an toàn bằng ID.
+## Các tệp
 
-## Mã nguồn
-
-| File | Vai trò |
+| Tệp | Nội dung |
 |---|---|
-| `src/iot_handler.py` | Lambda nhận message thiết bị từ IoT Rule, định tuyến theo topic |
-| `src/api_handler.py` | Lambda cho HTTP API: public/guest/kiosk/admin, kiểm nhóm Cognito, Idempotency-Key |
-| `src/jobs.py` | Mỗi phút: thiết bị offline, ô UNKNOWN, giữ ô quá 5 phút, lệnh chưa ACK. Mỗi giờ: purge định danh. `seed` lúc deploy |
-| `src/logic.py` | Nghiệp vụ: biển demo, chờ vào/cho vào (`TransactWriteItems`), chờ ra/cho ra, phí, gợi ý ô, danh sách xe (`lot_state`), tự gửi email theo biển |
-| `src/services.py` | Token QR HMAC, bảng giá, publish lệnh qua IoT Data Plane, email SES |
-| `src/core.py` | Bảng DynamoDB, thời gian, ID, layout 18 ô, cảnh báo, chống trùng |
+| `src/iot_handler.py` | Lambda `iot`: nhận tin nhắn từ thiết bị qua IoT Rule, chuyển tới hàm xử lý phù hợp |
+| `src/api_handler.py` | Lambda `api`: các API cho web, kiểm tra nhóm quyền, chống gửi lặp |
+| `src/jobs.py` | Lambda `jobs`: giám sát mỗi phút, dọn dữ liệu quá 10 ngày mỗi giờ, tạo dữ liệu ban đầu khi triển khai |
+| `src/logic.py` | Nghiệp vụ: chờ vào, cho vào, chờ ra, cho ra, tính tiền, gợi ý ô, danh sách xe, tự gửi email theo biển số |
+| `src/services.py` | Ký link QR, bảng giá, gửi lệnh MQTT, gửi email SES |
+| `src/core.py` | Truy cập bảng, thời gian, mã, biển số demo, cảnh báo |
 
-Chỉ dùng `boto3` có sẵn trong runtime Lambda, không cần build. Deploy: [infra/aws](../infra/aws/README.md).
+Chỉ dùng thư viện `boto3` có sẵn trên Lambda nên không cần build. Cách triển khai xem [infra/aws](../infra/aws/README.md).
+
+## Luồng chính
+
+- Pi báo có xe ở làn vào: tạo phiên "chờ cho vào" với biển số demo.
+- Nhân viên bấm Cho vào: một giao dịch DynamoDB đổi phiên sang "đang đỗ" và khóa biển số; sau đó gửi lệnh mở cần, cấp mã QR, tự gửi email nếu biển số đã ghi nhớ email.
+- Pi báo có xe ở làn ra: chọn xe số lớn nhất đang đỗ, chốt số tiền, chuyển sang "chờ cho ra".
+- Nhân viên bấm Cho ra (sau khi thu tiền nếu có phí): gửi lệnh mở cần, đóng phiên.
+
+Mọi tin nhắn và thao tác có mã riêng nên gửi lặp không bị xử lý hai lần.
+
+## Kiểm thử
 
 ```bash
-pip install "moto[dynamodb]" boto3 pytest
-cd backend && python -m pytest -q        # 11 kịch bản: vào/ra, phí, replay, đầy, tranh ô, offline, email, quyền
+python3 -m venv .venv && .venv/bin/pip install pytest "moto[dynamodb]" boto3
+cd backend && ../.venv/bin/python -m pytest -q tests
 ```
+
+16 kịch bản chạy với DynamoDB giả lập, không cần AWS: vào, ra, tính tiền, bãi đầy, gửi lặp, mất kết nối, email, ghi nhớ email, phân quyền, SES lỗi, dọn dữ liệu.

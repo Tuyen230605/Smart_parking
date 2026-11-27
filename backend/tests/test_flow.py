@@ -336,3 +336,41 @@ def test_duplicate_plate(env):  # SIM-09
     b = vehicle("ENTRY", "GREEN", "51A-12345")
     code, err = allow(b["session_id"], "51A-12345")
     assert code == 409 and err["code"] == "INVALID_STATE"  # biển đang có phiên trong bãi
+
+
+def test_ses_failure_keeps_session(env, monkeypatch):  # SIM-14: SES lỗi vẫn chỉ đường, ghi FAILED
+    online_all()
+    r = vehicle("ENTRY", "GREEN", None, conf=0)
+    allow(r["session_id"], r["plate"])
+    _, claims = api("GET", "/v1/kiosk/active-claims", groups="[KIOSK]")
+    token = claims[0]["claim_url"].rsplit("/", 1)[1]
+
+    def ses_down(*_a, **_k):
+        raise RuntimeError("MessageRejected: Email address is not verified")
+
+    monkeypatch.setattr(services, "send_guide_email", ses_down)
+    code, _ = api("POST", None, route="POST /v1/public/claims/{token}/email", params={"token": token}, groups=None,
+                  body={"email": "chua-xac-minh@example.com", "consent_for_this_session": True})
+    assert code == 202
+    s = session(r["session_id"])
+    assert s["email_status"] == "FAILED" and s["state"] == "PARKED"
+    assert any(a["kind"] == "EMAIL_FAILED" for a in core.scan_all("alerts"))
+    code, claim = api("GET", None, route="GET /v1/public/claims/{token}", params={"token": token}, groups=None)
+    assert code == 200 and claim["slot_id"]  # vẫn xem được chỉ đường
+
+
+def test_purge_after_ten_days(env):  # SIM-16: dữ liệu định danh quá hạn bị xóa
+    online_all()
+    r = vehicle("ENTRY", "GREEN", None, conf=0)
+    allow(r["session_id"], r["plate"])
+    old = core.iso(core.now() - timedelta(days=10))
+    core.table("sessions").update_item(
+        Key={"session_id": r["session_id"]},
+        UpdateExpression="SET plate_collected_at = :o, created_at = :o, email = :e, email_collected_at = :o",
+        ExpressionAttributeValues={":o": old, ":e": "a@b.vn"})
+    assert jobs.handler({"job": "purge"}, None)["purged"] == 1
+    s = session(r["session_id"])
+    assert not {"plate_normalized", "plate_display", "email", "claim_nonce"} & s.keys()
+    assert "identity_purged_at" in s
+    assert core.scan_all("plates") == []  # biển số không còn bị khóa
+

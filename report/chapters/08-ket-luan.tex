@@ -1,0 +1,22 @@
+\chapter{Kết luận}
+
+\section{Kết quả đạt được}
+
+Nhóm đã đi đủ các bước của một dự án đưa ứng dụng lên đám mây, từ nhận yêu cầu đến bàn giao:
+
+\begin{itemize}
+  \item Phân tích và lập kế hoạch. Từ 6 mục tiêu và 11 vấn đề cần làm rõ, nhóm xác định 13 yêu cầu chức năng và 10 yêu cầu phi chức năng. Nhóm so sánh các phương án (AWS hay OpenStack, không máy chủ hay máy ảo, xử lý ảnh tại bãi hay trên đám mây), và ước tính chi phí khoảng 3--5 USD mỗi tháng.
+  \item Thiết kế. Kiến trúc không máy chủ trên AWS với IoT Core, Lambda, DynamoDB, API Gateway, Cognito, SES, S3, CloudFront, EventBridge, CloudWatch và Budgets. Thiết bị, web và đám mây giao tiếp theo hai quy ước cố định. Cho xe vào bằng một giao dịch không bị chia cắt. Nhân viên cho phép từng lượt vào, ra. Trang khách gợi ý ô và vẽ đường đi. Khách tự chọn có ghi nhớ email hay không. Dữ liệu cá nhân bị xóa sau 10 ngày.
+  \item Triển khai. Toàn bộ hạ tầng dựng bằng một template CloudFormation và các script AWS CLI. Pi 5 có camera kết nối AWS. ESP32-S3 điều khiển một cần chắn hai hướng, ESP32 đọc 18 nút giả lập cảm biến ô; cả hai đều đã nạp phần mềm và chạy với AWS.
+  \item Kiểm thử. 16/16 kiểm thử nghiệp vụ và 5/5 kiểm thử phần phát hiện xe đạt. Luồng vào, chỉ đường, ra chạy được trên AWS với thiết bị thật. 16/16 kịch bản nghiệm thu đạt. Thời gian xử lý một sự kiện có trung vị 0,22 giây. Chi phí thực tế cả tháng khoảng 0,09 USD.
+  \item Bàn giao. Mã nguồn, hạ tầng dưới dạng mã, tài liệu kỹ thuật, hướng dẫn cài đặt và vận hành, nội dung hướng dẫn theo vai trò và bảng kiểm nghiệm thu.
+\end{itemize}
+
+Qua đề tài, nhóm rút ra một số bài học:
+\begin{itemize}
+  \item Chốt sớm quy ước giao tiếp giúp các phần thiết bị, đám mây và web làm song song được, nhờ có chương trình mô phỏng.
+  \item Hạ tầng dưới dạng mã giúp dựng lại và gỡ bỏ an toàn. Tệp template cũng là tài liệu chính xác nhất về hệ thống.
+  \item Nắm rõ thiết bị sẵn có (phiên bản Python của Pi, mạng chặn cổng, nguồn cho servo) giúp thấy sớm những rủi ro chỉ lộ ra khi lắp thật.
+  \item Chạy thử sớm với thiết bị thật giúp phát hiện các lỗi chỉ xuất hiện khi lắp thật, như nguồn cho servo hay cáp camera cắm lỏng.
+  \item Kiểm thử tự động cần phủ cả các tác vụ chạy ngầm. Một lỗi xóa nhầm hàm dọn dữ liệu chỉ được phát hiện khi thêm kiểm thử cho tác vụ này.
+\end{itemize}

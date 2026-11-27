@@ -83,3 +83,29 @@ def monitor():
     # 4. Gửi lại danh sách xe trong bãi cho Pi (trang camera) mỗi lần chạy.
     logic.publish_lot()
     return result
+
+
+def purge():
+    """Xóa biển số/email/token đã thu thập quá 9 ngày 23 giờ (UC-10)."""
+    at = core.now()
+    cutoff = core.iso(at - core.PURGE_AFTER)
+    purged = 0
+    sessions = core.scan_all(
+        "sessions",
+        FilterExpression="(attribute_exists(plate_normalized) AND plate_collected_at < :c) OR "
+                         "(attribute_exists(email) AND email_collected_at < :c) OR "
+                         "(attribute_exists(claim_nonce) AND created_at < :c)",
+        ExpressionAttributeValues={":c": cutoff},
+    )
+    for s in sessions:
+        if s.get("state") in core.OPEN_STATES:
+            core.alert("PURGE_OPEN_SESSION", f"Lượt {s['session_ref']} còn mở sát hạn 10 ngày, đã xóa định danh",
+                       session_id=s["session_id"])
+        logic.release_plate(s)
+        core.table("sessions").update_item(
+            Key={"session_id": s["session_id"]},
+            UpdateExpression="SET identity_purged_at = :now REMOVE plate_normalized, plate_display, email, claim_nonce",
+            ExpressionAttributeValues={":now": core.iso(at)},
+        )
+        purged += 1
+    return {"purged": purged}

@@ -1,0 +1,440 @@
+\chapter{Thiết kế giải pháp}
+
+Nguyên tắc chung của thiết kế là: \emph{thiết bị chỉ báo những gì xảy ra ở bãi và làm theo lệnh; mọi quyết định nằm ở đám mây}. Thiết bị, web và đám mây nói chuyện với nhau theo hai quy ước cố định. Quy ước thứ nhất là định dạng tin nhắn MQTT giữa thiết bị và đám mây. Quy ước thứ hai là danh sách API giữa web và đám mây. Nhờ cố định hai quy ước này sớm, phần thiết bị, phần web và phần đám mây làm song song được.
+
+\section{Điểm nổi bật của giải pháp}
+
+\subsection{Dịch vụ cơ bản và dịch vụ mở rộng}
+
+Ngoài các dịch vụ AWS cơ bản, hệ thống dùng thêm một nhóm dịch vụ mở rộng cho các phần việc đặc thù của bài toán (Bảng~\ref{tab:dichvu}).
+
+\begin{longtable}{@{}P{3.6cm}P{5.2cm}P{5.3cm}@{}}
+\caption{Dịch vụ cơ bản và dịch vụ mở rộng}\label{tab:dichvu}\\
+\toprule
+\textbf{Dịch vụ} & \textbf{Dùng để làm gì} & \textbf{Vì sao cần} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Dịch vụ} & \textbf{Dùng để làm gì} & \textbf{Vì sao cần} \\ \midrule
+\endhead
+\multicolumn{3}{@{}l}{\textit{Nhóm dịch vụ cơ bản}} \\
+IAM & Tài khoản triển khai và quyền tối thiểu cho từng hàm Lambda & Mỗi thành phần chỉ làm được đúng việc của mình \\
+S3 & Lưu gói mã Lambda và các tệp của trang web & Kho lưu trữ không mở công khai \\
+Lambda & Ba hàm xử lý: tin nhắn thiết bị, API cho web, tác vụ định kỳ & Không có máy chủ chạy cả ngày \\
+DynamoDB & 8 bảng dữ liệu (ô, phiên đỗ, thiết bị, bảng giá\ldots) & Ghi có điều kiện để không bị trùng; tự xóa bản ghi hết hạn \\
+API Gateway & Cửa vào của 19 API cho web & Kiểm tra đăng nhập trước khi gọi Lambda \\
+CloudWatch Logs & Lưu log của Lambda trong 7 ngày & Tìm lỗi khi vận hành \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Nhóm dịch vụ mở rộng}} \\
+AWS IoT Core & Nhận và gửi tin nhắn MQTT với Pi và hai ESP32; mỗi thiết bị có chứng chỉ X.509 và quyền riêng & Kết nối thiết bị an toàn mà không phải dựng máy chủ MQTT \\
+IoT Rules & Chuyển tin nhắn từ thiết bị sang Lambda bằng một câu lệnh giống SQL & Không cần chương trình nào ngồi chờ tin nhắn \\
+Amazon Cognito & Đăng nhập cho nhân viên quản trị và màn hình ở cổng, chia hai nhóm quyền & Không phải tự viết chức năng đăng nhập \\
+Amazon SES & Gửi email hướng dẫn cho khách & Rẻ hơn SMS, không bắt khách cài app \\
+EventBridge Scheduler & Chạy tác vụ giám sát mỗi phút và dọn dữ liệu mỗi giờ & Không cần máy chủ để hẹn giờ \\
+CloudFront (kèm OAC) & Phát hành web qua HTTPS; chỉ CloudFront được đọc kho S3 & Web nhanh, bảo mật, không lộ kho lưu trữ \\
+AWS Budgets & Gửi email khi chi phí tháng vượt 5 USD & Kiểm soát chi phí \\
+CloudFormation (SAM) & Khai báo toàn bộ hạ tầng trong một tệp, dựng bằng AWS CLI & Dựng lại, cập nhật, gỡ bỏ bằng một lệnh \\
+\bottomrule
+\end{longtable}
+
+\subsection{Các điểm kỹ thuật đáng chú ý}
+
+\begin{itemize}
+  \item Xử lý ảnh ngay tại bãi. Pi tự phát hiện xe, chỉ gửi kết quả lên đám mây, không gửi ảnh. Cách này riêng tư hơn và đỡ tốn băng thông.
+  \item Nhân viên cho phép từng lượt. Camera chỉ báo có xe. Cần chắn chỉ mở khi nhân viên bấm trên web, nên camera báo nhầm cũng không làm mở cổng.
+  \item Thao tác không bị chia cắt. Khi cho xe vào, việc đổi trạng thái phiên đỗ và khóa biển số được ghi cùng lúc. Hai yêu cầu đồng thời không thể tạo ra hai phiên cho một biển số.
+  \item Chống xử lý trùng. Mỗi tin nhắn và mỗi lệnh có mã riêng. Tin nhắn đến hai lần thì lần sau bị bỏ qua; lệnh cũ quá 5 giây cũng bị bỏ.
+  \item Kết nối qua cổng 443. Khi mạng chặn cổng MQTT thông thường (8883), thiết bị vẫn kết nối được qua cổng 443.
+  \item Link QR có chữ ký. Link QR được ký bằng khóa bí mật và hết hạn sau 15 phút, nên không ai đoán hay sửa được.
+  \item Bảo vệ dữ liệu cá nhân. Biển số và email tự bị xóa sau tối đa 10 ngày. Email chỉ được ghi nhớ lâu hơn khi khách tự chọn, và khách hủy được bất cứ lúc nào.
+  \item Chỉ đường bằng bản đồ. Trang của khách gợi ý ô trống, cho chọn ô khác và vẽ đường đi từ cổng, kể cả bước lên tầng 2.
+\end{itemize}
+
+\section{Kiến trúc tổng thể}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={rectangle,rounded corners=2pt,draw,thick,fill=white,minimum width=2.6cm,minimum height=0.95cm,align=center},
+  dev/.style={box,draw=edge,fill=edge!8},
+  awsb/.style={box,draw=aws!90!black,fill=aws!10},
+  webb/.style={box,draw=web,fill=web!8},
+  ar/.style={-{Stealth[length=2.4mm]},thick},
+  lbl/.style={font=\scriptsize,fill=white,inner sep=1pt}]
+  \node[dev] (pi) at (0,3.2) {Raspberry Pi 5\\camera, phát hiện xe\\\code{pi-01}};
+  \node[dev] (gate) at (0,0.9) {ESP32-S3 \code{gate-01}\\1 cần chắn 2 hướng};
+  \node[dev] (slots) at (0,-1.4) {ESP32 \code{slots-01}\\18 nút (giả lập cảm biến)};
+  \node[awsb] (iot) at (5.8,0.9) {AWS IoT Core\\MQTT/TLS, X.509};
+  \node[awsb] (rule) at (5.8,3.2) {IoT Rule\\lọc tin nhắn};
+  \node[awsb] (liot) at (9.8,3.2) {Lambda \code{iot}};
+  \node[awsb] (lapi) at (9.8,0.9) {Lambda \code{api}};
+  \node[awsb] (ljobs) at (9.8,-1.4) {Lambda \code{jobs}};
+  \node[awsb] (ddb) at (13.8,0.9) {DynamoDB\\8 bảng};
+  \node[awsb] (ses) at (13.8,3.2) {Amazon SES\\email};
+  \node[awsb] (eb) at (13.8,-1.4) {EventBridge\\1 phút / 1 giờ};
+  \node[awsb] (apigw) at (9.8,-3.7) {API Gateway\\HTTP API + JWT};
+  \node[awsb] (cog) at (13.8,-3.7) {Cognito\\ADMIN / KIOSK};
+  \node[awsb] (cf) at (5.8,-3.7) {CloudFront + S3\\web tĩnh (OAC)};
+  \node[awsb] (cw) at (17.6,1.9) {CloudWatch Logs\\log của 3 Lambda};
+  \node[awsb] (bud) at (17.6,-0.4) {AWS Budgets\\cảnh báo chi phí};
+  \node[webb] (user) at (0,-3.7) {Trình duyệt\\khách / kiosk / quản trị};
+  \begin{scope}[on background layer]
+    \node[draw=aws!80!black,dashed,very thick,rounded corners=6pt,fit=(iot)(rule)(liot)(ddb)(ses)(eb)(apigw)(cog)(cf)(cw)(bud),inner sep=10pt,label={[font=\bfseries\small,text=aws!80!black]north:AWS ap-southeast-1 (stack CloudFormation \code{smart-parking-dev})}] {};
+    \node[draw=edge,dashed,very thick,rounded corners=6pt,fit=(pi)(gate)(slots),inner sep=8pt,label={[font=\bfseries\small,text=edge]north:Tầng biên (sa bàn)}] {};
+  \end{scope}
+  \draw[ar,edge,<->] (pi.east) -- node[lbl,above,sloped,pos=0.55]{sự kiện / danh sách xe} (iot.north west);
+  \draw[ar,edge] (slots.east) -- node[lbl,below,sloped,pos=0.5]{trạng thái ô} (iot.south west);
+  \draw[ar,edge,<->] (gate.east) -- node[lbl,above,pos=0.5]{lệnh / phản hồi} (iot.west);
+  \draw[ar] (iot) -- (rule);
+  \draw[ar] (rule) -- (liot);
+  \draw[ar] (liot) -- (ddb.north west);
+  \draw[ar] (lapi) -- (ddb);
+  \draw[ar] (ljobs) -- (ddb.south west);
+  \draw[ar] (lapi.north east) -- (ses.south west);
+  \draw[ar,dashed] (liot.south west) -- node[lbl,pos=0.45]{gửi lệnh} (iot.north east);
+  \draw[ar,dashed] (lapi) -- (iot);
+  \draw[ar] (eb) -- (ljobs);
+  \draw[ar,dashed,gray] (ddb.east) -- (cw.west);
+  \draw[ar] (apigw) -- (lapi);
+  \draw[ar,dashed] (cog) -- node[lbl,above]{JWT} (apigw);
+  \draw[ar,web] (user) -- node[lbl,above]{HTTPS} (cf);
+  \draw[ar,web] (user.south) |- ++(0,-0.7) -| node[lbl,pos=0.25]{API /v1} (apigw.south);
+\end{tikzpicture}}
+\caption{Kiến trúc tổng thể của hệ thống trên AWS}
+\label{fig:kientruc}
+\end{figure}
+
+Hệ thống chia thành năm tầng:
+
+\begin{enumerate}
+  \item Tầng biên: Pi xử lý ảnh tại chỗ và chỉ gửi kết quả (có xe ở làn nào), đồng thời hiện danh sách xe do đám mây gửi xuống. ESP32-S3 điều khiển cần chắn. ESP32 đọc 18 nút giả lập cảm biến ô.
+  \item Tầng tiếp nhận: AWS IoT Core kiểm tra chứng chỉ của từng thiết bị. Một luật (IoT Rule) chuyển mọi tin nhắn \emph{từ thiết bị} sang hàm Lambda \code{iot}. Lệnh do đám mây gửi xuống không đi qua luật này.
+  \item Tầng xử lý: ba hàm Lambda dùng chung một bộ mã Python. Hàm \code{iot} xử lý tin nhắn thiết bị. Hàm \code{api} phục vụ 19 API cho web. Hàm \code{jobs} chạy giám sát mỗi phút, dọn dữ liệu mỗi giờ và tạo dữ liệu ban đầu.
+  \item Tầng dữ liệu: 8 bảng DynamoDB, trả tiền theo mức dùng.
+  \item Tầng giao diện: ứng dụng web React phát hành qua CloudFront, gọi API Gateway. Cognito cấp mã đăng nhập (JWT) cho nhân viên quản trị và màn hình ở cổng.
+\end{enumerate}
+
+Ngoài ra, CloudWatch Logs lưu log của ba hàm Lambda để tìm lỗi, và AWS Budgets gửi email khi chi phí vượt ngưỡng.
+
+\section{Thiết kế tầng biên}
+
+\subsection{Bố trí sa bàn}
+
+Bãi có 2 tầng. Mỗi tầng có 3 hàng (A, B, C) và 3 cột, tổng cộng 18 ô. Mã ô có dạng \code{F<tầng>-<hàng><cột>}, ví dụ \code{F1-A1}, \code{F2-C3}. Cổng vào ở góc trái trên. Lối chính chạy dọc bên trái. Mỗi hàng có lối đi ngang ngay dưới hàng ô. Cuối lối C là dốc lên tầng 2.
+
+Hệ thống \emph{không gán ô} cho xe. Ô chỉ dùng để chỉ chỗ trống. Ô được gợi ý là ô trống gần cổng nhất \emph{tại lúc khách xem}: tầng 1 trước, sau đó hàng A, B, C, cột 1 đến 3. Đường đi được sinh từ mã ô. Ví dụ với ô \code{F1-B2}: ``Qua cổng vào, đi theo lối chính bên trái; rẽ phải vào lối đi hàng B; ô F1-B2 ở cột 2''. Với ô ở tầng 2 thì thêm bước ``đi hết lối C, lên dốc lên tầng 2''.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[slot/.style={draw,thick,minimum width=1.25cm,minimum height=0.7cm,font=\scriptsize\ttfamily},x=1.4cm,y=0.85cm]
+  \foreach \f/\xo in {1/0,2/5} {
+    \node[font=\small\bfseries] at (\xo+1,3.9) {Tầng \f};
+    \foreach \r/\y in {A/3,B/2,C/1} \foreach \c in {1,2,3} {
+      \node[slot] at (\xo+\c-1,\y) {F\f-\r\c};
+    }
+  }
+  \draw[-{Stealth},thick,navy] (-1.0,3) node[left,font=\scriptsize]{Cổng vào} -- (-0.5,3);
+  \draw[-{Stealth},thick,navy,dashed] (2.6,1) -- node[above,font=\scriptsize]{dốc} (4.4,1);
+  \node[font=\scriptsize,align=left,anchor=west] at (-1.1,0) {\tikz\node[draw,minimum size=6pt,inner sep=0]{}; mỗi ô một nút nhấn giả lập cảm biến có xe (18 ô)};
+\end{tikzpicture}
+\caption{Sơ đồ 18 ô của sa bàn}
+\label{fig:sodo}
+\end{figure}
+
+\subsection{Raspberry Pi 5: chương trình phát hiện xe}
+
+Một camera nhìn cả hai làn. Khung hình chia làm hai vùng: nửa trái là làn vào, nửa phải là làn ra. Vị trí hai vùng chỉnh được trong tệp cấu hình. Bản demo không dùng thẻ màu hay biển số in. Đưa tay hoặc xe mô hình vào vùng làn là ``có xe''. Mỗi giây chương trình xử lý 10 khung hình như sau:
+
+\begin{enumerate}
+  \item Chuẩn bị ảnh. Cắt vùng làn, thu nhỏ còn 160 điểm ảnh chiều ngang, chuyển sang ảnh xám và làm mờ nhẹ để bớt nhiễu.
+  \item So với ảnh nền. Mỗi làn có một ảnh nền lúc trống. Chương trình so ảnh mới với ảnh nền, sau khi đã bù chênh lệch độ sáng chung (camera tự chỉnh độ sáng). Điểm ảnh lệch quá 30 mức xám được tính là ``khác nền''.
+  \item Chống báo nhầm. Nếu từ 8\,\% diện tích làn trở lên khác nền trong 3 khung liên tiếp, chương trình báo \emph{một} lượt có xe. Muốn báo lượt tiếp theo, làn phải trống 8 khung liên tiếp và cách lượt trước ít nhất 3 giây. Vật nằm yên quá 15 giây sẽ được tính vào nền, để làn không bị kẹt. Khi làn trống, ảnh nền được cập nhật chậm theo ánh sáng.
+  \item Gửi sự kiện lên đám mây qua MQTT (Mục~\ref{sec:mqtt}), kèm tin báo còn sống mỗi 30 giây. Pi không tự mở cần và không tự cấp biển số.
+  \item Nhận danh sách xe từ đám mây (xe trong bãi, xe chờ vào, xe chờ ra) để hiện lên trang camera.
+\end{enumerate}
+
+Trang camera (\code{http:/\allowbreak{}/\allowbreak{}<ip-pi>:8000}) hiện hình camera và vẽ hai khung làn. Màu khung cho biết trạng thái: xám là trống, cam là đang thấy vật, xanh là đã báo. Trang còn hiện danh sách xe, nút \emph{Thử xe VÀO}, \emph{Thử xe RA} (dùng khi chưa đặt camera) và nút \emph{Chụp lại nền}. Nếu camera hỏng hoặc chưa cắm, trang vẫn chạy, hiện dòng báo ``không có hình'', và hai nút thử vẫn dùng được.
+
+
+\subsection{ESP32-S3 \code{gate-01}: một cần chắn hai hướng}
+
+\begin{itemize}
+  \item Một servo SG90 làm cần chắn chung cho hai làn, nối chân GPIO18. Cần thẳng (90°) là đóng. Lệnh mở làn vào làm cần quay trái 90° (180°). Lệnh mở làn ra làm cần quay phải 90° (0°). Phía đám mây vẫn coi đây là hai cần riêng (vào và ra); phần mềm trên bo mạch quy cả hai về một servo. Nếu làn này đang mở mà có lệnh mở làn kia, làn cũ được báo đóng rồi cần quay sang hướng mới.
+  \item Servo cần nguồn 5~V thật và phải nối chung GND với ESP32. Lưu ý: chân \code{5Vin} của nhiều bo mạch ESP32-S3 không có điện khi cắm USB. Mỗi lần khởi động, bo mạch cho servo quay thử 150°, 30° rồi về 90° để kiểm tra nhanh nguồn và dây.
+  \item Khi nhận lệnh mở cần, bo mạch bỏ qua lệnh sai định dạng, gửi nhầm thiết bị, đã quá hạn (5 giây sau khi gửi) hoặc trùng với 20 lệnh gần nhất. Lệnh hợp lệ thì thực hiện và báo lại từng bước: đang mở, đã mở, đang đóng, đã đóng. Có lỗi thì báo lỗi kèm mã. Cần tự về giữa sau 5 giây.
+  \item Bo mạch đồng bộ giờ qua mạng để kiểm tra hạn lệnh, gửi tin báo còn sống mỗi 30 giây. Khi mất kết nối đột ngột, AWS tự phát tin ``thiết bị offline'' thay cho bo mạch (cơ chế Last Will của MQTT).
+\end{itemize}
+
+\subsection{ESP32 \code{slots-01}: trạng thái ô}
+
+\begin{itemize}
+  \item 18 nút nhấn giả lập cảm biến có xe, mỗi ô một nút. Một chân nút nối vào GPIO, chân kia nối GND. Bo mạch bật điện trở kéo lên có sẵn trong chip nên không cần linh kiện ngoài. Chân chưa cắm nút luôn được coi là chưa nhấn.
+  \item Mỗi lần nhấn đảo trạng thái ô giữa trống và có xe. Bo mạch lọc rung phím 50~ms và lưu trạng thái vào bộ nhớ trong để không mất khi mất điện. Trạng thái ô chỉ dùng để chỉ chỗ trống, không ảnh hưởng phiên đỗ hay số tiền.
+  \item Bo mạch gửi thay đổi ngay khi có. Ngoài ra, nó gửi trạng thái đủ 18 ô khi khởi động, khi kết nối lại và mỗi 30 giây.
+\end{itemize}
+
+\section{Tin nhắn MQTT giữa thiết bị và đám mây}
+\label{sec:mqtt}
+
+Thiết bị và đám mây trao đổi bằng giao thức MQTT. Mỗi tin nhắn được gửi vào một \emph{kênh} (topic), bên nào đăng ký kênh đó thì nhận được. Mọi kênh có chung tiền tố \code{parking/\allowbreak{}v1/\allowbreak{}site-01/\allowbreak{}}. Mỗi kênh chỉ có \emph{một} bên được gửi (Bảng~\ref{tab:topic}). Quyền này được đặt trong chính sách IoT của từng thiết bị.
+
+\begin{table}[H]
+\centering
+\caption{Danh sách kênh MQTT (bỏ tiền tố \code{parking/\allowbreak{}v1/\allowbreak{}site-01/\allowbreak{}})}
+\label{tab:topic}
+\begin{tabularx}{\textwidth}{@{}P{5.2cm}P{2.2cm}P{2.3cm}L@{}}
+\toprule
+\textbf{Kênh} & \textbf{Bên gửi} & \textbf{Bên nhận} & \textbf{Nội dung} \\ \midrule
+\code{vision/\allowbreak{}pi-01/\allowbreak{}events} & Pi & IoT Rule & Có xe ở làn \\
+\code{slots/\allowbreak{}slots-01/\allowbreak{}state} & ESP32 ô & IoT Rule & Trạng thái ô \\
+\code{gates/\allowbreak{}gate-01/\allowbreak{}commands} & Lambda & ESP32 cổng & Lệnh mở, đóng cần \\
+\code{gates/\allowbreak{}gate-01/\allowbreak{}telemetry} & ESP32 cổng & IoT Rule & Trạng thái cần \\
+\code{devices/\allowbreak{}\{id\}/\allowbreak{}status} & Thiết bị đó & IoT Rule & Tin báo còn sống \\
+\code{vision/\allowbreak{}pi-01/\allowbreak{}lot} & Lambda & Pi & Danh sách xe \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Mọi tin nhắn ở dạng JSON và có phần đầu chung: phiên bản định dạng, loại tin, mã sự kiện (\code{event\_id}), mã thiết bị, mã lần khởi động, số thứ tự và thời điểm xảy ra. Ví dụ tin nhắn khi có xe ở làn vào:
+
+\begin{lenh}
+{"schema_version": 1, "message_type": "vehicle_detected",
+ "event_id": "e6221775-e0d6-4c33-913c-fefcb31c90b1",
+ "device_id": "pi-01", "boot_id": "52d430d8-...", "seq": 17,
+ "occurred_at": "2026-11-25T09:00:00Z",
+ "lane_id": "ENTRY", "card_color": "GREEN",
+ "plate_text": null, "plate_confidence": 0}
+\end{lenh}
+
+Trường \code{card\_color} được giữ để sau này có thể dùng thẻ màu phân biệt làn; hiện Pi luôn gửi \code{GREEN} cho làn vào và \code{RED} cho làn ra.
+
+Vì Pi không đọc biển số, đám mây cấp biển số demo. Xe vào nhận số nhỏ nhất chưa dùng: 11111, 22222, \ldots{} Từ xe thứ 10 thì lặp số 3 lần, ví dụ 101010, để không trùng. Xe ra là xe có số lớn nhất đang đỗ. Nếu sau này Pi gửi biển số đọc được với độ tin cậy từ 0,85 trở lên, đám mây sẽ dùng biển số đó. Mỗi khi danh sách xe thay đổi, và cứ mỗi phút, đám mây gửi lại danh sách xuống Pi.
+
+Về độ tin cậy, tin nhắn được gửi theo mức ``ít nhất một lần'' (QoS~1), nghĩa là có thể đến hai lần. Vì vậy đám mây bỏ tin trùng theo mã sự kiện, còn ESP32 bỏ lệnh trùng theo mã lệnh. Không gửi ảnh, email, link QR hay thông tin thanh toán qua MQTT. Khi mạng chặn cổng 8883, thiết bị kết nối qua cổng 443.
+
+\section{Thiết kế dữ liệu}
+
+\begin{longtable}{@{}P{3cm}P{3cm}P{8.1cm}@{}}
+\caption{Các bảng DynamoDB (tên có tiền tố \code{smart-parking-dev-})}\label{tab:bang}\\
+\toprule
+\textbf{Bảng} & \textbf{Khóa chính} & \textbf{Nội dung} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Bảng} & \textbf{Khóa chính} & \textbf{Nội dung} \\ \midrule
+\endhead
+\code{slots} & \code{slot\_id} & 18 ô: tầng, hàng, cột, trạng thái (trống, có xe, không rõ) \\
+\code{sessions} & \code{session\_id} & Phiên đỗ: mã ngắn, biển số, trạng thái, giờ vào, giờ ra, tiền, thanh toán, email, lịch sử thao tác, mốc hết hạn dữ liệu \\
+\code{active-plates} & \code{plate\_key} & Biển số đang trong bãi và phiên đỗ tương ứng. Bảo đảm một biển số chỉ có một phiên đỗ trong bãi \\
+\code{plate-emails} & \code{plate\_\allowbreak{}normalized} & Email khách tự chọn ghi nhớ cho biển số, kèm mã dùng cho link hủy. Giữ tới khi khách hủy \\
+\code{processed} & \code{message\_id} & Mã tin nhắn, mã lệnh đã xử lý để bỏ bản trùng. Tự xóa khi hết hạn \\
+\code{devices} & \code{device\_id} & Lần cuối thấy thiết bị, trạng thái kết nối, phiên bản phần mềm, trạng thái cần chắn, lệnh đang chờ phản hồi \\
+\code{pricing} & \code{pricing\_id} & Bảng giá hiện hành, có phiên bản \\
+\code{alerts} & \code{alert\_id} & Cảnh báo cho quản trị (xe chờ vào, chờ ra, thiết bị mất kết nối, mở cần bằng tay, gửi email lỗi\ldots). Tự xóa khi hết hạn \\
+\bottomrule
+\end{longtable}
+
+Ô có bốn trạng thái: trống (\code{AVAILABLE}), có xe (\code{OCCUPIED}), không rõ (\code{UNKNOWN}) và ngừng dùng (\code{OUT\_\allowbreak{}OF\_\allowbreak{}SERVICE}). Ô không bị giữ cho xe nào. Nếu bo mạch đọc nút mất kết nối quá 90 giây, cả 18 ô chuyển sang không rõ. Khi đó xe vẫn được cho vào, chỉ là không có ô gợi ý.
+
+\subsection{Thao tác cho xe vào dạng nguyên tử (atomic)}
+
+Khi nhân viên bấm \emph{Cho vào}, hệ thống phải làm hai việc: đổi trạng thái phiên đỗ sang ``đang đỗ'' và ghi biển số vào bảng xe trong bãi. Hai việc này được gộp vào một giao dịch DynamoDB (\code{TransactWriteItems}). Giao dịch chỉ thành công khi cả hai điều kiện đều đúng:
+
+\begin{enumerate}
+  \item Phiên đỗ vẫn đang ở trạng thái chờ cho vào.
+  \item Biển số chưa có trong bãi.
+\end{enumerate}
+
+Chỉ cần một điều kiện sai, cả giao dịch bị hủy, không có thay đổi nào được ghi. Nhờ vậy một biển số không thể có hai phiên đỗ, và một lượt không thể được cho vào hai lần, kể cả khi hai người bấm cùng lúc. Khi bị hủy, trang quản trị báo lỗi để nhân viên biết. Bãi chỉ bị coi là đầy khi bo mạch đọc nút đang kết nối và không còn ô trống nào. Khi đó trang quản trị báo bãi đã đầy và cần không mở.
+
+\section{Các trạng thái của phiên đỗ}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  s/.style={rectangle,rounded corners=8pt,draw=navy,thick,fill=soft,minimum height=0.8cm,minimum width=2.8cm,font=\scriptsize\ttfamily},
+  f/.style={s,fill=gray!15,draw=gray},
+  ar/.style={-{Stealth[length=2mm]},thick},
+  t/.style={font=\scriptsize,align=center,fill=white,inner sep=1.5pt}]
+  \node[s] (pen) at (0,0) {ENTRY\_PENDING};
+  \node[s] (par) at (6.8,0) {PARKED};
+  \node[s] (exr) at (13.6,0) {EXIT\_REQUESTED};
+  \node[f] (clo) at (13.6,-2.8) {CLOSED};
+  \node[f] (rej) at (0,-2.8) {REJECTED};
+  \draw[ar] (-4.2,0) -- node[t,above=4pt]{camera thấy xe\\ở làn vào} (pen);
+  \draw[ar] (pen) -- node[t,above=4pt]{nhân viên \emph{Cho vào}\\(mở cần vào)} (par);
+  \draw[ar] (pen) -- node[t,left=2pt]{nhân viên\\\emph{Không cho vào}} (rej);
+  \draw[ar] (par) -- node[t,above=4pt]{camera thấy xe\\ở làn ra (chốt tiền)} (exr);
+  \draw[ar] (exr) -- node[t,right=2pt]{nhân viên \emph{Cho ra}\\(đã thu / miễn phí;\\mở cần ra)} (clo);
+\end{tikzpicture}}
+\caption{Các trạng thái của một phiên đỗ}
+\label{fig:trangthai}
+\end{figure}
+
+Một phiên đỗ đi qua các trạng thái ở Hình~\ref{fig:trangthai}: chờ cho vào (\code{ENTRY\_PENDING}), đang đỗ (\code{PARKED}), chờ cho ra (\code{EXIT\_REQUESTED}), kết thúc (\code{CLOSED}) hoặc bị từ chối (\code{REJECTED}). Mỗi lần chuyển trạng thái là một lần ghi có điều kiện, để hai yêu cầu đồng thời không cùng chuyển. Mỗi lần chuyển cũng được ghi vào lịch sử, kèm người thao tác và thời điểm. Xe nằm trong \emph{danh sách xe trong bãi} khi phiên ở trạng thái đang đỗ hoặc chờ cho ra. Nút ô không làm đổi trạng thái phiên.
+
+\section{Luồng xử lý chính}
+
+\subsection{Xe vào}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  actor/.style={rectangle,draw,thick,fill=soft,minimum width=2.1cm,minimum height=0.7cm,font=\small\bfseries},
+  msg/.style={-{Stealth[length=2mm]},thick},
+  t/.style={font=\scriptsize,fill=white,inner sep=1pt,align=center}]
+  \foreach \n/\x/\lab in {pi/0/Pi camera,iot/3/IoT Core,lam/6/Lambda,db/9/DynamoDB,gate/12/ESP32 cổng,adm/15/Quản trị (web)} {
+    \node[actor] (\n) at (\x,0) {\lab};
+    \draw[gray,dashed] (\x,-0.4) -- (\x,-9.4);
+  }
+  \draw[msg,edge] (0,-1) -- node[t,above]{có xe ở làn vào} (3,-1);
+  \draw[msg] (3,-1.6) -- node[t,above]{IoT Rule} (6,-1.6);
+  \draw[msg] (6,-2.4) -- node[t,above]{phiên chờ vào,\\biển 11111} (9,-2.4);
+  \draw[msg,dashed] (6,-3.0) -- node[t,above]{danh sách xe (chờ vào: 11111)} (0,-3.0);
+  \draw[msg,web] (15,-3.8) -- node[t,above]{trang hiện thẻ ``Chờ cho vào''} (6.05,-3.8);
+  \draw[msg,web] (15,-4.6) -- node[t,above]{nhân viên bấm \emph{Cho vào}} (6.05,-4.6);
+  \draw[msg] (6,-5.4) -- node[t,above]{đang đỗ +\\khóa biển số} (9,-5.4);
+  \draw[msg] (6,-6.0) -- node[t,above,pos=0.3]{lệnh mở cần vào (hạn 5 s)} (3,-6.0);
+  \draw[msg] (3,-6.5) -- (12,-6.5);
+  \draw[msg,dashed,edge] (12,-8.2) -- node[t,above,pos=0.4]{đã mở $\rightarrow$ đã đóng} (3,-8.2);
+  \draw[msg,dashed] (6,-8.9) -- node[t,above]{danh sách xe (trong bãi: 11111)} (0,-8.9);
+\end{tikzpicture}}
+\caption{Trình tự xử lý khi xe vào}
+\label{fig:xevao}
+\end{figure}
+
+Sự kiện từ Pi chỉ tạo một phiên \emph{chờ cho vào}. Khi nhân viên bấm \emph{Cho vào}, Lambda mới gửi lệnh mở cần và cấp mã QR để hiện trên trang kiosk ở cổng. Nếu biển số đã được ghi nhớ email, Lambda tự gửi email hướng dẫn. Nếu nhân viên bấm \emph{Không cho vào}, phiên chuyển sang bị từ chối và số biển demo được dùng lại cho xe sau. Nếu bo mạch cổng mất kết nối, phiên vẫn được ghi nhưng trang quản trị hiện cảnh báo.
+
+\subsection{Xe ra và tính tiền}
+
+Khi camera thấy xe ở làn ra, Lambda chọn xe có số lớn nhất đang đỗ. Nếu Pi gửi biển số đọc được thì Lambda tìm theo biển số đó. Lambda chốt thời điểm kết thúc tính tiền và tính theo bảng giá đã lưu lúc xe vào:
+
+\[
+\text{tiền}(t) =
+\begin{cases}
+0 & t < 15 \text{ phút}\\
+10.000\ \text{đ} & 15 \leq t \leq 60 \text{ phút}\\
+10.000 + 5.000 \cdot \left\lceil \dfrac{t-60}{60} \right\rceil\ \text{đ} & t > 60 \text{ phút}
+\end{cases}
+\]
+
+Ví dụ đỗ 61 phút thì trả 15.000 đ. Phiên chuyển sang chờ cho ra. Trang \emph{Phiên đỗ} hiện thẻ ``Chờ cho ra'' với số tiền cỡ chữ lớn. Cần ra \emph{không tự mở}, kể cả khi miễn phí:
+\begin{itemize}
+  \item Miễn phí: nhân viên bấm \emph{Cho ra}.
+  \item Có phí: nhân viên thu tiền mặt rồi bấm \emph{Đã thu \ldots{} cho ra}, hoặc bấm \emph{Miễn phí} và ghi lý do.
+\end{itemize}
+Sau đó Lambda gửi lệnh mở cần ra, kết thúc phiên đỗ, bỏ biển số khỏi bảng xe trong bãi và gửi lại danh sách xe cho Pi.
+
+\subsection{Mã QR, bản đồ đường đi và email}
+
+Link QR chứa mã phiên đỗ, một số ngẫu nhiên và thời hạn 15 phút. Link được ký bằng khóa bí mật chỉ Lambda biết (chữ ký HMAC-SHA256), nên không ai sửa hay đoán được. Link không chứa biển số hay email và không lưu trong cơ sở dữ liệu.
+
+Khách quét QR sẽ mở trang \code{/s/<mã>}. Trang gợi ý ô trống gần cổng nhất lúc đó và vẽ bản đồ hai tầng với \emph{đường đi từ cổng vào} tới ô. Nếu ô ở tầng 2, bản đồ tầng 1 vẽ đường tới dốc và ghi ``đi tiếp lên tầng 2'' (Hình~\ref{fig:qr}). Khách chạm vào ô trống khác thì đường đi được vẽ lại. Gợi ý không giữ chỗ.
+
+Khách có thể nhập email và tích ô đồng ý. Email ghi đường tới ô đã chọn, kèm link mở lại bản đồ. Mỗi phiên đỗ chỉ gửi được một email: gửi lần thứ hai thì báo đã gửi, link hết hạn thì báo hết hạn. Nếu SES gửi lỗi, phiên đỗ không bị ảnh hưởng, hệ thống chỉ ghi lại là gửi thất bại.
+
+Ghi nhớ email theo biển số. Nếu khách tích ``Ghi nhớ email cho biển số xe này'', hệ thống lưu email vào bảng \code{plate-emails}. Lần sau xe có biển số đó được cho vào, hệ thống tự gửi email hướng dẫn, không cần quét QR. Mỗi email tự gửi có link \emph{Hủy liên kết}. Link này cũng được ký bằng khóa bí mật. Trên trang QR, email đã ghi nhớ được che bớt (ví dụ \code{kh***@gmail.com}) và có nút \emph{Bỏ liên kết}.
+
+\section{Danh sách API}
+
+API Gateway có 19 đường dẫn (route). Mặc định mọi đường dẫn đều yêu cầu đăng nhập qua Cognito; năm đường dẫn dành cho khách thì không cần. Lambda kiểm tra nhóm quyền ở từng đường dẫn, không dựa vào việc ẩn nút trên web. Các thao tác làm thay đổi dữ liệu nhận thêm một khóa chống lặp (\code{Idempotency-Key}): gửi lại cùng khóa thì nhận lại đúng kết quả cũ, không thực hiện lần hai.
+
+\begin{longtable}{@{}P{7.4cm}P{2cm}P{4.7cm}@{}}
+\caption{Danh sách API (đường dẫn bắt đầu bằng \code{/v1})}\label{tab:api}\\
+\toprule
+\textbf{Đường dẫn} & \textbf{Quyền} & \textbf{Chức năng} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Đường dẫn} & \textbf{Quyền} & \textbf{Chức năng} \\ \midrule
+\endhead
+\code{GET /\allowbreak{}public/\allowbreak{}layout} & Công khai & Sơ đồ 18 ô, không lộ biển số \\
+\code{GET /\allowbreak{}public/\allowbreak{}claims/\allowbreak{}\{mã\}} & Link QR & Ô gợi ý, đường đi, số chỗ trống, email đã ghi nhớ (che bớt) \\
+\code{POST /\allowbreak{}public/\allowbreak{}claims/\allowbreak{}\{mã\}/\allowbreak{}email} & Link QR & Gửi email hướng dẫn (1 lần); tùy chọn ghi nhớ theo biển số \\
+\code{POST /\allowbreak{}public/\allowbreak{}claims/\allowbreak{}\{mã\}/\allowbreak{}forget-email} & Link QR & Bỏ liên kết email \\
+\code{POST /\allowbreak{}public/\allowbreak{}unsubscribe/\allowbreak{}\{mã\}} & Link hủy & Hủy liên kết từ email tự gửi \\
+\code{GET /\allowbreak{}kiosk/\allowbreak{}active-claims} & KIOSK, ADMIN & Mã QR của các phiên đỗ mới \\
+\code{GET /\allowbreak{}admin/\allowbreak{}dashboard} & ADMIN & Tổng hợp ô, thiết bị, cảnh báo, danh sách xe \\
+\code{GET /\allowbreak{}admin/\allowbreak{}sessions} & ADMIN & Danh sách phiên đỗ \\
+\code{GET /\allowbreak{}admin/\allowbreak{}sessions/\allowbreak{}\{id\}} & ADMIN & Chi tiết một phiên đỗ \\
+\code{POST /\allowbreak{}admin/\allowbreak{}sessions/\allowbreak{}\{id\}/\allowbreak{}resolve-plate} & ADMIN & \emph{Cho vào} (mở cần vào) hoặc \emph{Không cho vào} \\
+\code{POST /\allowbreak{}admin/\allowbreak{}sessions/\allowbreak{}\{id\}/\allowbreak{}renew-claim} & ADMIN & Cấp lại mã QR \\
+\code{POST /\allowbreak{}admin/\allowbreak{}sessions/\allowbreak{}\{id\}/\allowbreak{}payment} & ADMIN & Ghi đã thu hoặc miễn phí, rồi cho ra \\
+\code{POST /\allowbreak{}admin/\allowbreak{}sessions/\allowbreak{}\{id\}/\allowbreak{}open-exit} & ADMIN & \emph{Cho ra} khi miễn phí \\
+\code{POST /\allowbreak{}admin/\allowbreak{}sessions/\allowbreak{}\{id\}/\allowbreak{}confirm-passage} & ADMIN & Đóng phiên đỗ ở trạng thái cũ (\code{EXIT\_OPENED}); luồng hiện tại không gọi \\
+\code{GET /\allowbreak{}admin/\allowbreak{}devices} & ADMIN & Trạng thái 3 thiết bị \\
+\code{GET}, \code{PUT /\allowbreak{}admin/\allowbreak{}pricing} & ADMIN & Xem, sửa bảng giá \\
+\code{POST /\allowbreak{}admin/\allowbreak{}gates/\allowbreak{}\{cần\}/\allowbreak{}command} & ADMIN & Mở, đóng cần bằng tay (có ghi cảnh báo) \\
+\code{POST /\allowbreak{}admin/\allowbreak{}alerts/\allowbreak{}\{id\}/\allowbreak{}ack} & ADMIN & Đánh dấu đã xem cảnh báo \\
+\bottomrule
+\end{longtable}
+
+Khi có lỗi, API trả về một mã lỗi thống nhất, ví dụ: dữ liệu không hợp lệ (400), chưa đăng nhập hoặc không có quyền (401, 403), không tìm thấy (404), bãi đầy hoặc sai trạng thái (409), link hết hạn (410), gọi quá nhanh (429), thiết bị cổng mất kết nối (503). API Gateway giới hạn 20 yêu cầu mỗi giây.
+
+\section{Ứng dụng web}
+
+Một ứng dụng React (viết bằng TypeScript) dùng chung cho mọi đối tượng:
+
+\begin{itemize}
+  \item \code{/}: sơ đồ công khai 18 ô (trống, có xe, không rõ).
+  \item \code{/kiosk}: màn hình ở cổng, đăng nhập bằng tài khoản KIOSK. Hiện mã QR lớn của phiên đỗ vừa được cho vào, kèm ô gợi ý và bản đồ đường đi.
+  \item \code{/s/:mã}: trang của khách, mở từ mã QR. Có ô gợi ý, bản đồ chọn ô và vẽ đường đi, ô nhập email, tùy chọn ghi nhớ email, nút bỏ liên kết.
+  \item \code{/huy-email/:mã}: hủy liên kết email từ link trong email tự gửi.
+  \item \code{/admin}: trang quản trị, gồm ba thẻ. \emph{Tổng quan} có danh sách xe trong bãi, chờ vào, chờ ra, thiết bị, cảnh báo và nút mở cần bằng tay. \emph{Phiên đỗ} có các nút \emph{Cho vào}, \emph{Cho ra} và thu tiền. \emph{Bảng giá} để sửa giá.
+\end{itemize}
+
+\section{Bảo mật}
+
+\begin{longtable}{@{}P{3.2cm}P{10.9cm}@{}}
+\caption{Các lớp bảo mật}\label{tab:baomat}\\
+\toprule
+\textbf{Phần} & \textbf{Biện pháp} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Phần} & \textbf{Biện pháp} \\ \midrule
+\endhead
+Thiết bị & Mỗi thiết bị có chứng chỉ X.509 và chính sách riêng. Thiết bị chỉ kết nối được bằng đúng tên của mình và chỉ gửi, nhận trên đúng kênh của mình. Không có khóa truy cập AWS trên thiết bị. Khóa riêng nằm trong thư mục chỉ chủ tệp được đọc trên Pi, và trong tệp \code{secrets.h} không đưa lên kho mã với ESP32. \\
+Lambda & Mỗi hàm chỉ được dùng đúng các bảng cần thiết. Quyền gửi tin MQTT chỉ cho kênh lệnh của cổng và kênh danh sách xe của Pi. Quyền gửi email chỉ từ địa chỉ đã xác minh. \\
+Người dùng & Cognito chỉ cho quản trị tạo tài khoản, không cho tự đăng ký. Mã đăng nhập hết hạn sau 60 phút. Nhóm quyền ADMIN, KIOSK được kiểm tra trong Lambda. \\
+Khách & Không cần tài khoản. Link QR có chữ ký, hết hạn sau 15 phút, không chứa biển số hay email. Email chỉ được ghi nhớ khi khách tự chọn và hủy được bằng link có chữ ký. \\
+Web & Kho S3 chặn mọi truy cập công khai. Chỉ CloudFront được đọc kho qua cơ chế OAC. Bắt buộc dùng HTTPS. \\
+Dữ liệu cá nhân & Biển số, email của mỗi phiên bị xóa từ mốc 9 ngày 23 giờ và hết hạn ở mốc 10 ngày. API không trả dữ liệu quá hạn. Log giữ 7 ngày, không ghi biển số, email. Email đã ghi nhớ giữ tới khi khách hủy. \\
+Thông tin bí mật & Khóa ký QR, chứng chỉ và cấu hình triển khai nằm trong thư mục \code{secrets/} và các tệp \code{*.local}, không đưa lên kho mã. \\
+Chi phí & AWS Budgets gửi email khi chi phí tháng vượt ngưỡng. \\
+\bottomrule
+\end{longtable}
+
+\section{Giám sát và tác vụ định kỳ}
+
+EventBridge gọi hàm Lambda \code{jobs} theo lịch:
+
+\begin{itemize}
+  \item Mỗi phút (giám sát): thiết bị im lặng quá 90 giây thì đánh dấu mất kết nối và tạo cảnh báo. Bo mạch đọc nút mất kết nối thì cả 18 ô chuyển sang không rõ. Lệnh mở cần không có phản hồi sau 15 giây thì tạo cảnh báo. Cuối cùng gửi lại danh sách xe cho Pi.
+  \item Mỗi giờ (dọn dữ liệu): xóa biển số, email của các phiên đỗ đã quá mốc 9 ngày 23 giờ.
+  \item Khi triển khai (tạo dữ liệu ban đầu): tạo 18 ô (trạng thái không rõ cho tới khi nhận được trạng thái từ bo mạch) và bảng giá mặc định.
+\end{itemize}
+
+\section{Hạ tầng dưới dạng mã}
+
+Toàn bộ tài nguyên đám mây được khai báo trong một tệp \code{infra/\allowbreak{}aws/\allowbreak{}template.yaml}, dùng CloudFormation kèm phần mở rộng SAM. Riêng IoT Thing và chứng chỉ thiết bị do script tạo, để khóa riêng không đi qua CloudFormation.
+
+\begin{table}[H]
+\centering
+\caption{Tài nguyên trong template CloudFormation}
+\label{tab:tainguyen}
+\begin{tabularx}{\textwidth}{@{}P{5.2cm}cL@{}}
+\toprule
+\textbf{Loại tài nguyên} & \textbf{SL} & \textbf{Ghi chú} \\ \midrule
+Bảng DynamoDB & 8 & Trả theo mức dùng; tự xóa bản ghi hết hạn ở \code{processed}, \code{alerts} \\
+Hàm Lambda & 3 & Python 3.12, chip ARM, 256 MB. \code{iot} gắn IoT Rule, \code{api} gắn 19 đường dẫn, \code{jobs} gắn 2 lịch chạy \\
+Nhóm log CloudWatch & 3 & Giữ 7 ngày \\
+HTTP API (API Gateway) & 1 & Kiểm tra đăng nhập Cognito, cho phép gọi từ web, giới hạn tốc độ \\
+Cognito (user pool, client, nhóm) & 4 & Nhóm ADMIN, KIOSK \\
+Địa chỉ gửi email SES & 1 & Địa chỉ gửi \\
+Kho S3 và chính sách & 2 & Chặn truy cập công khai \\
+CloudFront và OAC & 2 & HTTPS; mọi đường dẫn web trả về \code{index.html} \\
+AWS Budgets & 1 & Ngưỡng 5 USD mỗi tháng \\
+\bottomrule
+\end{tabularx}
+\end{table}

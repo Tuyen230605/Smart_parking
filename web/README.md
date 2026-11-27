@@ -1,43 +1,39 @@
-# Web dùng chung cho khách, kiosk và quản trị
+# Web
 
-Một ứng dụng responsive, ba chế độ:
+Một ứng dụng React (Vite, TypeScript) dùng chung cho mọi người:
 
-- Public/guest: sơ đồ 18 ô; trang QR phiên gợi ý ô trống, cho khách chạm chọn ô và vẽ đường đi từ cổng vào (`components/RouteMap.tsx`), form email (tùy chọn ghi nhớ theo biển số); `/huy-email/:token` hủy liên kết.
-- Kiosk tại cổng: hiển thị QR phiên vừa được cho vào kèm bản đồ đường đi, không hiện dữ liệu riêng của xe khác.
-- Admin: đăng nhập Cognito; Tổng quan có danh sách xe trong bãi/chờ vào/chờ ra; Phiên đỗ có nút **Cho vào** và **Cho ra** (thu tiền) để mở cần; thiết bị, bảng giá.
+| Đường dẫn | Dùng cho |
+|---|---|
+| `/` | Sơ đồ 18 ô, ai cũng xem được |
+| `/kiosk` | Màn hình ở cổng: mã QR lớn và bản đồ đường đi của xe vừa vào. Đăng nhập bằng tài khoản `kiosk` |
+| `/s/:mã` | Trang của khách mở từ mã QR: ô gợi ý, bản đồ chọn ô và vẽ đường đi, gửi email, ghi nhớ email |
+| `/huy-email/:mã` | Hủy ghi nhớ email từ link trong email |
+| `/admin` | Quản trị: danh sách xe, nút Cho vào, Cho ra, thu tiền, thiết bị, bảng giá. Đăng nhập bằng tài khoản `admin` |
 
-Web dùng [REST API](../docs/api-contract.md); không nhúng AWS secret hoặc subscribe IoT Core trực tiếp.
+Web chỉ gọi [API](../docs/api-contract.md), không kết nối trực tiếp tới IoT Core và không chứa khóa AWS.
 
 ## Chạy
 
 ```bash
 cd web
 npm install
-npm run dev          # http://localhost:5173, dùng API giả
-npm run build        # kiểm tra kiểu + build ra dist/ để đưa lên S3
+npm run dev     # http://localhost:5173
+npm run build   # kiểm tra kiểu và build ra dist/
 ```
 
-Khi backend đã deploy: chép `.env.example` thành `.env.local` và điền `VITE_API_BASE_URL`. Bỏ trống thì app dùng API giả trong `src/api/mock.ts` và hiện dải vàng báo đang mock.
+Sau khi chạy `infra/aws/deploy.sh`, cấu hình API được ghi sẵn vào `web/.env.*.local` nên `npm run dev` gọi API thật. Không có cấu hình thì web dùng API giả trong `src/api/mock.ts` và hiện dải vàng báo đang dùng dữ liệu giả. Đường dẫn thử với API giả: `/s/demo`, `/s/demo-f2`, `/s/sent`, `/s/expired`.
 
-Đường dẫn thử với API giả: `/s/demo`, `/s/demo-f2`, `/s/sent` (đã gửi email), `/s/expired` (QR hết hạn).
+Đưa web lên CloudFront: `infra/aws/deploy-web.sh`.
 
-## Cấu trúc và người phụ trách
+## Cấu trúc
 
-Vite + React + TypeScript + React Router. Một app, một bộ API, mỗi người sở hữu một thư mục trang.
+| Thư mục | Nội dung |
+|---|---|
+| `src/pages/public/` | Sơ đồ bãi |
+| `src/pages/kiosk/` | Màn hình QR ở cổng |
+| `src/pages/guest/` | Trang của khách, trang hủy email |
+| `src/pages/admin/` | Trang quản trị |
+| `src/components/` | Sơ đồ ô, bản đồ đường đi (`RouteMap.tsx`), đăng nhập |
+| `src/api/` | Kiểu dữ liệu, gọi API thật (`http.ts`), API giả (`mock.ts`) |
 
-| Đường dẫn | URL | Người |
-|---|---|---|
-| `src/pages/guest/` | `/s/:token` (URL trong QR) | 1 |
-| `src/pages/kiosk/` | `/kiosk` | 2 |
-| `src/pages/public/`, `src/components/FloorMap.tsx` | `/` | 3 |
-| `src/pages/admin/`, `src/auth.ts` | `/admin/*` | 4 |
-| `src/api/`, `src/App.tsx`, `src/styles.css` | dùng chung | sửa qua PR, báo cả nhóm |
-
-## Quy ước
-
-- Mọi lời gọi backend đi qua `api` trong `src/api`. Không gọi `fetch` trực tiếp trong trang.
-- Thêm endpoint mới: thêm kiểu vào `types.ts` → thêm hàm vào interface `Api` → cài đặt ở cả `http.ts` và `mock.ts`. Nhờ vậy trang luôn chạy được bằng mock khi backend chưa xong.
-- Kiểu dữ liệu bám [api-contract.md](../docs/api-contract.md). Đổi hợp đồng thì sửa tài liệu và `types.ts` trong cùng một PR, có người 4 duyệt.
-- Dùng màu/biến CSS sẵn có trong `styles.css` (`--available`, `--occupied`…) để các trang trông thống nhất.
-- Mutation gửi header `Idempotency-Key` (xem `submitClaimEmail`). Trang khách không hiện biển số/email.
-- Deploy S3 + CloudFront phải trả `index.html` cho lỗi 403/404 để route `/s/...`, `/admin` tải được trực tiếp.
+Thêm API mới thì sửa đủ ba chỗ: `types.ts`, `http.ts`, `mock.ts`. Như vậy trang vẫn chạy được với dữ liệu giả.

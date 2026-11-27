@@ -1,10 +1,9 @@
-"""Giả làm camera Pi: một xe quẹt thẻ ở làn vào/ra — dùng khi chưa bật Pi thật.
+"""Giả làm camera của Pi: báo có một xe ở làn vào hoặc làn ra (dùng khi chưa có Pi).
 
-    python simulation/fake_car.py vao 51A-12345      # thẻ XANH làn vào → gán ô, QR hiện trên kiosk, mở cần vào
-    python simulation/fake_car.py ra  51A-12345      # thẻ ĐỎ làn ra → tính phí (miễn phí <15 phút thì tự mở cần ra)
-    python simulation/fake_car.py vao 51A-1Z345 --confidence 0.4   # OCR kém → admin phải duyệt
+    python simulation/fake_car.py vao 51A-12345   # xe ở làn vào -> phiên "Chờ cho vào" trên /admin/sessions
+    python simulation/fake_car.py ra  51A-12345   # xe ở làn ra  -> phiên "Chờ cho ra", hiện số tiền
 
-Mượn client id pi-01 → TẮT pi-vision trên Pi trước khi chạy.
+Cần mở cổng thì vẫn phải bấm Cho vào / Cho ra trên trang quản trị.
 """
 import argparse
 import logging

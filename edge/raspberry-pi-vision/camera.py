@@ -27,7 +27,12 @@ class PiCamera:
         time.sleep(1)
 
     def read(self):
-        return self.cam.capture_array("main")
+        # Cáp CSI lỗi làm camera treo ("Camera frontend has timed out"): chờ tối đa 3 s rồi trả None
+        # để vòng lặp vẫn chạy (trang xem trước, MQTT, nút thử vẫn dùng được).
+        try:
+            return self.cam.capture_array("main", wait=3)
+        except TimeoutError:
+            return None
 
     def close(self):
         self.cam.stop()
@@ -68,10 +73,25 @@ class StillImage:
         pass
 
 
+class NoCamera:
+    """Không mở được camera (chưa cắm, cáp hỏng): dịch vụ vẫn chạy để demo bằng nút Thử xe VÀO/RA."""
+
+    def read(self):
+        return None
+
+    def close(self):
+        pass
+
+
 def open_camera(cfg):
     source = str(cfg["source"])
     if source == "picamera2":
-        return PiCamera(cfg["width"], cfg["height"], int(cfg.get("camera_num", 0)))
+        try:
+            return PiCamera(cfg["width"], cfg["height"], int(cfg.get("camera_num", 0)))
+        except Exception as err:  # noqa: BLE001 — thiếu camera không được làm sập dịch vụ
+            import logging
+            logging.getLogger(__name__).error("Không mở được camera: %s — chạy tiếp không camera", err)
+            return NoCamera()
     if Path(source).suffix.lower() in IMAGE_SUFFIXES:
         return StillImage(source)
     return CvSource(source)

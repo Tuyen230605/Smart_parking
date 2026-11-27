@@ -1,62 +1,56 @@
-# Phần cứng, đấu nối và dự toán
+# Phần cứng, nối dây và chi phí
 
-Giá tham khảo tại Việt Nam, kiểm tra **05/10/2026**. Giá bán thay đổi theo cấu hình, VAT, vận chuyển và cửa hàng. Dòng có “ước tính” là ngân sách để lập kế hoạch, **chưa phải báo giá xác nhận**. Sơ đồ mặt bãi nằm ở [parking-layout.md](parking-layout.md).
+Giá tham khảo tại Việt Nam, kiểm tra tháng 10/2026. Giá thực tế thay đổi theo cửa hàng, VAT và phí vận chuyển. Dòng ghi "ước tính" chỉ để lập kế hoạch.
 
-## 1. Danh mục phần cứng MVP
+## Danh sách linh kiện
 
-| Vật tư | Số lượng | Giá đơn vị tham khảo | Thành tiền tham khảo | Vai trò/nguồn |
-|---|---:|---:|---:|---|
-| Raspberry Pi 5 (ưu tiên 4 GB RAM) | 1 | từ 3.300.000 ₫ | 3.300.000–4.200.000 ₫ | Camera, phát hiện xe trong làn; [giá từ nhà bán](https://raspberrypi.vn/san-pham/mach-may-tinh-raspberry-pi-5?attribute_pa_ram=4gb), giá chính xác theo biến thể cần chốt khi mua |
-| Camera Module 3 12 MP, bản thường hoặc góc rộng tùy góc lắp | 1 | từ 890.000 ₫ | 890.000–1.200.000 ₫ | Hai vùng làn; [giá từ nhà bán](https://raspberrypi.vn/san-pham/raspberry-pi-camera-module-v3-12mp-ong-kinh-lay-net-tu-dong) |
-| ESP32 DevKit V1 30 pin | 2 | 120.000 ₫ | 240.000 ₫ | Một board cổng, một board ô; [giá tham khảo](https://pyworld.vn/san-pham/esp32-devkit-v1-30pin.html) |
-| ~~Cảm biến ToF VL53L0X~~ (không cần, phương án cũ) | 0 | 115.000 ₫ | 0 ₫ | Ô F1-A1; [giá tham khảo](https://hshop.vn/cam-bien-khoang-cach-tof-laser-radar-vl53l0x) |
-| ~~MCP23017 16 GPIO I²C~~ (không cần, phương án cũ) | 0 | 40.000–75.000 ₫ ước tính | 0 ₫ | Đọc 17 nút; [ví dụ module](https://linhkienx.com/mcp23017-e-ss-mach-mo-rong-i2c-16-chan-i-o) |
-| Nút nhấn + điện trở/dây cắm | 17 | 3.000–7.000 ₫ ước tính | 51.000–119.000 ₫ | Một nút cho mỗi ô mô phỏng |
-| Servo SG90 hoặc MG90S cho cần mô hình | 1 | 35.000–70.000 ₫ ước tính | 35.000–70.000 ₫ | Một cần 3 vị trí: thẳng = đóng, trái = vào, phải = ra |
-| OLED I²C 0,96 inch 128×64 | 1 | 80.000–150.000 ₫ ước tính | 80.000–150.000 ₫ | Hiển thị ô, đường ngắn, phí |
-| Nguồn USB-C 5 V/5 A phù hợp Pi 5 | 1 | khoảng 330.000 ₫ | 330.000 ₫ | [nguồn tham khảo trên trang Pi 5](https://raspberrypi.vn/san-pham/mach-may-tinh-raspberry-pi-5?attribute_pa_ram=4gb) |
-| Nguồn 5 V/2 A riêng cho servo | 1 | 100.000–200.000 ₫ ước tính | 100.000–200.000 ₫ | Tránh sụt áp ESP/Pi |
-| Thẻ microSD 32 GB | 1 | 200.000–450.000 ₫ ước tính | 200.000–450.000 ₫ | Hệ điều hành Pi |
-| Cáp camera đúng đầu nối Pi 5, giá đỡ camera | 1 bộ | 90.000–180.000 ₫ ước tính | 90.000–180.000 ₫ | Cần kiểm tra cáp 22-pin phía Pi 5 trước khi mua |
-| Breadboard/perfboard, dây, jack, vật tư điện | 1 bộ | 150.000–300.000 ₫ ước tính | 150.000–300.000 ₫ | Đấu nối và cố định |
-| Mặt bãi 2 tầng, 1 cần chắn, xe mô hình | 1 bộ | 300.000–700.000 ₫ ước tính | 300.000–700.000 ₫ | Dựng sa bàn |
-| Đèn chiếu sáng vùng biển số | 1 | 50.000–150.000 ₫ ước tính | 50.000–150.000 ₫ | Giữ phát hiện ổn định (tùy chọn) |
+| Linh kiện | SL | Thành tiền tham khảo | Dùng để |
+|---|---:|---:|---|
+| Raspberry Pi 5 (4 GB) | 1 | 3.300.000–4.200.000 ₫ | Chạy camera và phát hiện xe |
+| Camera cho Pi (OV5647 hoặc Camera Module 3) | 1 | 250.000–1.200.000 ₫ | Nhìn hai làn vào, ra |
+| Cáp camera 22 chân sang 15 chân cho Pi 5 | 1 | 50.000–100.000 ₫ ước tính | Pi 5 dùng cổng camera nhỏ |
+| Nguồn USB-C 5 V/5 A cho Pi 5 | 1 | khoảng 330.000 ₫ | Nguồn 5 V/3 A (sạc điện thoại) chạy được nhưng dễ sụt điện |
+| Thẻ microSD 32 GB | 1 | 200.000–450.000 ₫ ước tính | Hệ điều hành cho Pi |
+| ESP32-S3 DevKit | 1 | 150.000–250.000 ₫ ước tính | Điều khiển cần chắn |
+| ESP32 DevKit V1 | 1 | khoảng 120.000 ₫ | Đọc 18 nút |
+| Servo SG90 | 1 | 35.000–70.000 ₫ ước tính | Cần chắn quay hai hướng |
+| Nguồn 5 V riêng cho servo (ví dụ cục sạc điện thoại) | 1 | 50.000–200.000 ₫ ước tính | Servo không lấy điện từ ESP32-S3 được |
+| Nút nhấn và dây cắm | 18 | 50.000–130.000 ₫ ước tính | Mỗi ô một nút |
+| Breadboard, dây, vật tư điện | 1 bộ | 150.000–300.000 ₫ ước tính | Nối mạch |
+| Sa bàn 2 tầng, cần chắn, xe mô hình | 1 bộ | 300.000–700.000 ₫ ước tính | Dựng mô hình |
 
-**Tổng ngân sách phần cứng:** khoảng **6,0–8,7 triệu ₫**, chưa gồm VAT, vận chuyển và màn hình kiosk. Có thể giảm mạnh nếu nhóm đã có Pi/camera/nguồn. Laptop hoặc tablet hiện có dùng để hiện QR và dashboard; nếu không có màn hình nào ở cổng, cần bổ sung một màn hình đủ lớn để khách quét QR.
+Tổng khoảng 5–8 triệu đồng, chưa gồm laptop hoặc máy tính bảng dùng làm màn hình QR ở cổng. Nếu đã có sẵn Pi và camera thì chi phí giảm còn khoảng 1 triệu.
 
-## 2. Đấu nối logic
+## Nối dây
 
-### Pi 5
+### Raspberry Pi 5
 
-- Camera qua CSI bằng cáp phù hợp Pi 5; Wi-Fi/Ethernet tới AWS IoT Core.
-- Không điều khiển trực tiếp servo. Dùng nguồn Pi riêng, ưu tiên loại 5 V/5 A.
-- Một camera nhìn hai vạch dừng; cấu hình ROI `entry` và `exit`. Đặt góc sao cho biển số đủ pixel, có đèn ổn định và hai xe không chồng nhau trong ảnh.
+- Camera cắm vào cổng camera bằng cáp 22 sang 15 chân. Mặt có chân kim loại của cáp quay về phía cổng HDMI. Luôn tắt Pi trước khi cắm, rút cáp camera.
+- Cáp camera lỏng sẽ làm ảnh bị sọc màu rồi treo, có khi làm Pi tự tắt. Gặp vậy thì tắt Pi và cắm lại cho chặt.
+- Pi lên mạng qua dây LAN (xem [setup-guide.md](setup-guide.md) mục 5.1).
 
-### ESP32 `gate-01`
+### ESP32-S3 `gate-01` (cần chắn)
 
-- PWM servo ở GPIO18 của ESP32-S3; firmware gán `ENTRY` = trái 90°, `EXIT` = phải 90°, đóng = thẳng.
-- OLED dùng I²C (SDA/SCL) 3,3 V nếu module cho phép; kiểm tra mức kéo lên của module.
-- Servo cấp từ nguồn 5 V/2 A riêng, **mass chung** với ESP32; tín hiệu điều khiển từ GPIO. Không lấy dòng servo từ GPIO/nguồn USB của Pi.
-- Nút dừng khẩn/mở tay là phần nên có khi mô hình cơ khí lớn hơn; MVP dùng servo nhỏ và nút ngắt nguồn cơ cấu khi thao tác.
+| Dây servo SG90 | Nối vào |
+|---|---|
+| Cam hoặc vàng (tín hiệu) | GPIO18 của ESP32-S3 |
+| Đỏ (5 V) | 5 V của nguồn riêng |
+| Nâu (GND) | GND của nguồn riêng, và nối thêm một dây sang GND của ESP32-S3 |
 
-### ESP32 `slots-01`
+Không cắm dây đỏ vào chân `5Vin` của ESP32-S3 (chân này thường không có điện khi cắm USB), cũng không cắm vào `3V3`. Dây GND chung là bắt buộc, thiếu thì servo không hiểu tín hiệu.
 
-- **Bản hiện tại:** 18 nút nối thẳng 18 GPIO của ESP32 thường (bảng chân ở [parking-layout.md](parking-layout.md)), chân kia nối GND, dùng pull-up trong chip; không cần MCP23017 hay VL53L0X (hai dòng trong bảng giá trên là phương án cũ, không cần mua).
-- **Nguồn servo ở board cổng ESP32-S3:** chân `5Vin` của nhiều board S3 không có điện khi cấp qua USB (cần nối miếng hàn `IN-OUT`); lấy 5 V cho servo từ Pi (chân 2) hoặc nguồn riêng và nối GND chung.
-- Nút nhấn đảo trạng thái giả lập; lưu NVS. Không dùng nút bấm trên `gate-01` để tránh nhầm lệnh cổng với trạng thái ô.
+Có thể lấy 5 V cho servo từ chân số 2 (5 V) và chân số 6 (GND) của Pi, rồi nối GND của Pi với GND của ESP32-S3. Cách này chỉ nên dùng khi Pi có nguồn 5 V/5 A.
 
-## 3. Điều kiện “đủ phần cứng”
+Mỗi lần khởi động, servo tự quay 150°, 30° rồi về 90°. Không thấy quay là thiếu nguồn hoặc sai dây.
 
-Hai ESP32, Pi/camera và 18 nút **đủ cho demo logic** vào/ra/chỉ chỗ trống nếu có nguồn, servo/cần, OLED, Wi-Fi và thiết bị hiện QR. Một OLED 0,96 inch quá nhỏ để trông cậy vào việc quét QR theo phiên; dùng laptop/tablet đã có hoặc màn hình HDMI ở kiosk.
+### ESP32 `slots-01` (18 nút)
 
-Không có cảm biến xe qua cổng nên quản trị bấm Cho vào/Cho ra trên web. Nếu muốn tự động hoàn toàn sau này, thêm cảm biến tia hồng ngoại tại mỗi làn; không tính vào MVP.
+Mỗi nút một chân vào GPIO, chân kia vào GND. Không cần điện trở vì chip có sẵn điện trở kéo lên. Bảng chân cho từng ô ở [parking-layout.md](parking-layout.md). Trên một số board, GPIO16 và GPIO17 được in là `RX2` và `TX2`.
 
-## 4. Chi phí AWS cần dự trù
+### Nguồn
 
-- Bật AWS Budgets trước khi demo; đặt cảnh báo nhỏ (ví dụ 5 USD và 10 USD) và tắt tài nguyên sau buổi demo.
-- IoT Core tính theo kết nối, message và Rules; giảm chi phí bằng cách gửi `slot_changed` khi đổi và `slots_snapshot` mỗi 30 giây, không gửi 18 message riêng liên tục. [Bảng giá IoT Core](https://aws.amazon.com/iot-core/pricing/).
-- Lambda, API Gateway, DynamoDB, S3/CloudFront, Cognito và CloudWatch có cách tính phí khác nhau theo vùng/sử dụng. Dùng [AWS Pricing Calculator](https://calculator.aws/) cho region định triển khai; không giả định toàn bộ hệ thống miễn phí.
-- SES là kênh thông báo chính; bảng giá AWS có thể đổi theo plan/region. AWS công bố plan Essentials từ 07/2026 ở mức **0,16 USD/1.000 email trong bậc đầu**; 500 email khoảng **0,08 USD tiền gửi cơ bản** trước các ưu đãi/phụ phí. Đây chỉ là phép nhân tham khảo, không phải tổng chi phí AWS. [Thông báo plan SES](https://aws.amazon.com/about-aws/whats-new/2026/07/amazon-ses-pricing-plans/), [giá SES](https://aws.amazon.com/ses/pricing/).
-- Tài khoản SES ở sandbox chỉ gửi tới địa chỉ đã xác minh; demo với email nhóm trước, xin production access nếu muốn khách nhập email bất kỳ. [Hướng dẫn SES sandbox](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html).
+Hai bo ESP32 nên cắm vào hai nguồn USB riêng. Cắm cả hai vào cùng một laptop có thể làm bo ESP32 sụt điện và tự khởi động lại liên tục.
 
-**Dự toán đúng trước khi mua/triển khai:** chốt region AWS, số giờ thiết bị online, số xe/ngày, số email/ngày, số lượt API, mức lưu CloudWatch/S3; lấy báo giá mới và kiểm tra VAT.
+## Chi phí AWS
+
+Chi phí AWS ước tính khoảng 3–5 USD mỗi tháng nếu bãi chạy 12 giờ mỗi ngày (phần lớn do màn hình kiosk và trang quản trị gọi API liên tục). Thực tế khi chạy demo, từ 1/11 đến 27/11/2026 chỉ tốn khoảng 0,09 USD và được tín dụng của tài khoản trừ hết.

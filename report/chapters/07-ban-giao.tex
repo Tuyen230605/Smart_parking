@@ -1,0 +1,123 @@
+\chapter{Bàn giao}
+
+Mục tiêu của bước này là để người vận hành bãi tự dùng được hệ thống: biết khởi động, theo dõi, xử lý các tình huống hay gặp, cập nhật và gỡ bỏ toàn bộ hạ tầng khi cần.
+
+\section{Danh mục bàn giao}\label{sec:danhmuc}
+
+\begin{longtable}{@{}P{3.6cm}P{7.2cm}P{3.3cm}@{}}
+\caption{Danh mục bàn giao}\label{tab:bangiao}\\
+\toprule
+\textbf{Hạng mục} & \textbf{Nội dung} & \textbf{Hình thức} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Hạng mục} & \textbf{Nội dung} & \textbf{Hình thức} \\ \midrule
+\endhead
+Mã nguồn & Phần đám mây, web, chương trình trên Pi, phần mềm ESP32, chương trình mô phỏng, kiểm thử & Kho GitHub (nhánh \code{main}) \\
+Hạ tầng dưới dạng mã & \code{template.yaml} và 7 script triển khai, gỡ bỏ & Thư mục \code{infra/aws/} \\
+Tài liệu kỹ thuật & Kiến trúc, tình huống sử dụng, sơ đồ bãi, quy ước tin nhắn và API, phần cứng, kế hoạch kiểm thử & Thư mục \code{docs/} \\
+Hướng dẫn cài đặt & Từng bước từ cấu hình AWS CLI tới nạp phần mềm ESP32 & \code{docs/\allowbreak{}setup-guide.md} \\
+Tài khoản ứng dụng & \code{admin} (ADMIN) và \code{kiosk} (KIOSK) trên Cognito & Giao trực tiếp; người nhận đặt mật khẩu mới bằng \code{create-users.sh} \\
+Chứng chỉ thiết bị & 3 bộ chứng chỉ và khóa riêng (\code{pi-01}, \code{gate-01}, \code{slots-01}) & Thư mục \code{secrets/}, chép qua kênh an toàn, không gửi qua email hay kho mã \\
+Cấu hình triển khai & Email gửi SES, email nhận cảnh báo chi phí, khóa ký QR & \code{secrets/\allowbreak{}deploy.env} \\
+Thiết bị & Pi đã cài chương trình phát hiện xe; ESP32-S3 (cần chắn hai hướng) và ESP32 (18 nút) đã nạp phần mềm & Tại chỗ \\
+\bottomrule
+\end{longtable}
+
+\section{Hướng dẫn vận hành}
+
+\subsection{Khởi động hằng ngày}
+
+\begin{lenh}
+# Trên Pi: dịch vụ pi-vision tự chạy khi bật nguồn
+journalctl -u pi-vision -n 30 --no-pager | grep MQTT
+#   -> phải có dòng "Đã kết nối MQTT"
+
+# Cắm điện ESP32-S3 (servo có nguồn 5 V riêng, nối chung GND)
+# và ESP32 18 nút; cả hai tự vào Wi-Fi đã khai báo
+\end{lenh}
+
+Sau đó mở \code{/admin}, thẻ \emph{Tổng quan}: cả \code{pi-01}, \code{gate-01}, \code{slots-01} phải ở trạng thái ONLINE. Mở \code{/kiosk} trên màn hình ở cổng, \code{/admin/\allowbreak{}sessions} trên máy của nhân viên, và trang camera \code{http:/\allowbreak{}/\allowbreak{}<ip-pi>:8000} nếu cần.
+
+\subsection{Tình huống hay gặp}
+
+\begin{longtable}{@{}P{4.6cm}P{9.5cm}@{}}
+\caption{Xử lý tình huống khi vận hành}\label{tab:runbook}\\
+\toprule
+\textbf{Tình huống} & \textbf{Cách xử lý} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Tình huống} & \textbf{Cách xử lý} \\ \midrule
+\endhead
+Có xe ở làn vào & Vào \emph{Phiên đỗ}, thẻ ``Chờ cho vào'' hiện biển số. Bấm \emph{Cho vào} để mở cần. Nếu camera báo nhầm thì bấm \emph{Không cho vào}. Mọi thao tác đều được ghi lại người thực hiện. \\
+Có xe ở làn ra & Thẻ ``Chờ cho ra'' hiện số tiền. Miễn phí thì bấm \emph{Cho ra}. Có phí thì thu tiền mặt rồi bấm \emph{Đã thu \ldots{} cho ra}, hoặc bấm \emph{Miễn phí} và ghi lý do. Xe rời danh sách ngay. \\
+Khách muốn hủy email tự gửi & Khách bấm \emph{Hủy liên kết} trong email, hoặc \emph{Bỏ liên kết email} trên trang QR. \\
+Thiết bị mất kết nối & Kiểm tra nguồn và Wi-Fi. Với Pi, xem \code{systemctl status pi-vision}. Nếu mạng chặn cổng 8883 thì đặt \code{port = 443} trong \code{config.local.toml} và khởi động lại dịch vụ. \\
+Ô hiện ``không rõ'' & Bo mạch ô mất kết nối quá 90 giây. Ô tự trở lại khi bo mạch gửi trạng thái. \\
+Bấm cho vào, cho ra mà cần không quay & Xem cảnh báo ở \emph{Tổng quan}. Xem log của ESP32-S3: nếu có dòng ra lệnh servo mà servo không quay thì servo đang thiếu nguồn 5~V. Có thể mở cần bằng tay (hệ thống ghi cảnh báo). \\
+Camera báo nhầm hoặc không nhận tay & Trên trang camera: bỏ tay ra rồi bấm \emph{Chụp lại nền}. Chỉnh vùng làn và độ nhạy trong \code{config.toml}. Lượt báo nhầm thì bấm \emph{Không cho vào}. \\
+Trang camera báo ``không có hình'' & Tắt Pi, cắm lại cáp camera cho chặt, kiểm tra nguồn. Trong lúc đó vẫn dùng được nút \emph{Thử xe VÀO}, \emph{Thử xe RA}. \\
+Đổi bảng giá & Vào \emph{Bảng giá}. Phiên đỗ đang mở vẫn giữ bảng giá lúc vào. \\
+Nhận email cảnh báo chi phí & Kiểm tra trang Billing; nếu không dùng nữa thì gỡ hạ tầng (mục~\ref{sec:gobo}). \\
+\bottomrule
+\end{longtable}
+
+\subsection{Cập nhật và bảo trì}
+
+\begin{itemize}
+  \item Cập nhật phần đám mây: chạy \code{git pull}, rồi chạy lại \code{deploy.sh} trong \code{infra/\allowbreak{}aws}. CloudFormation chỉ đổi phần thay đổi.
+  \item Cập nhật web: chạy \code{infra/\allowbreak{}aws/\allowbreak{}deploy-web.sh}.
+  \item Cập nhật Pi: chạy \code{git pull} trong \code{\textasciitilde/\allowbreak{}Cloud-Course}, chạy lại \code{install-pi.sh}, rồi khởi động lại dịch vụ \code{pi-vision}.
+  \item Thêm tài khoản: tạo người dùng Cognito và thêm vào nhóm ADMIN hoặc KIOSK (\code{create-users.sh} là mẫu).
+  \item Thiết bị bị mất: vô hiệu hóa chứng chỉ của thiết bị đó trong IoT Core, rồi chạy lại \code{provision-devices.sh} để cấp chứng chỉ mới.
+  \item Xem log: trên Pi dùng \code{journalctl -u pi-vision}; với Lambda dùng \code{aws logs tail /\allowbreak{}aws/\allowbreak{}lambda/\allowbreak{}smart-parking-dev-iot --follow}.
+\end{itemize}
+
+\subsection{Tắt an toàn}
+
+Với Pi: chạy \code{sudo shutdown -h now} hoặc nhấn nút nguồn một lần. Chờ đèn chuyển đỏ mới rút điện. Hạ tầng AWS có thể để nguyên: khi không có thiết bị gửi tin, chi phí gần như bằng không.
+
+\subsection{Gỡ bỏ toàn bộ hạ tầng}\label{sec:gobo}
+
+\begin{lenh}
+cd infra/aws && ./destroy.sh   # xóa web, stack, Thing, chứng chỉ, chính sách
+\end{lenh}
+
+\section{Hướng dẫn sử dụng theo vai trò}\label{sec:huongdan}
+
+\begin{table}[H]
+\centering
+\caption{Nội dung hướng dẫn theo vai trò}
+\label{tab:daotao}
+\begin{tabularx}{\textwidth}{@{}P{3.4cm}LP{1.8cm}@{}}
+\toprule
+\textbf{Đối tượng} & \textbf{Nội dung} & \textbf{Thời lượng} \\ \midrule
+Nhân viên bãi & Đăng nhập; đọc trang Tổng quan và danh sách xe; \emph{Cho vào}, \emph{Không cho vào}; thu tiền, miễn phí, \emph{Cho ra}; mở cần bằng tay; sửa bảng giá & 1 buổi \\
+Kỹ thuật viên thiết bị & Khởi động thiết bị; chỉnh vùng làn và độ nhạy; nối mạng cho Pi qua dây LAN; xem log; đổi Wi-Fi và nạp phần mềm ESP32; cấp nguồn cho servo & 1 buổi \\
+Người phụ trách hệ thống & Cấu trúc kho mã; AWS CLI; triển khai, cập nhật, gỡ hạ tầng; cấp và thu hồi chứng chỉ; đọc log CloudWatch; theo dõi chi phí & 1 buổi \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Sau buổi hướng dẫn, người học tự làm lại một vòng xe vào, xe ra và một lần triển khai lại hạ tầng.
+
+\section{Bảng kiểm nghiệm thu}\label{sec:bienban}
+
+Bảng~\ref{tab:kiemnghiemthu} đối chiếu tiêu chí nghiệm thu (mục~\ref{sec:nghiemthu}) với kết quả kiểm thử ở Chương~6.
+
+\begin{table}[H]
+\centering
+\caption{Bảng kiểm nghiệm thu}
+\label{tab:kiemnghiemthu}
+\begin{tabularx}{\textwidth}{@{}LP{2.2cm}P{3.6cm}@{}}
+\toprule
+\textbf{Hạng mục} & \textbf{Kết quả} & \textbf{Căn cứ} \\ \midrule
+Xe vào (cho vào), chỉ đường, xe ra (thu tiền, cho ra) chạy trên AWS & $\checkmark$ Đạt & SIM-01, 02, 07; mục~\ref{sec:vong2} \\
+Màn hình QR ở cổng, trang khách (chọn ô, bản đồ đường đi), email và ghi nhớ email & $\checkmark$ Đạt & SIM-03, 04, 14, 15 \\
+Trang quản trị: danh sách xe, cho vào, cho ra, thu tiền, bảng giá, thiết bị, cảnh báo & $\checkmark$ Đạt & SIM-02, 06, 07 \\
+Camera phát hiện xe ở hai làn; một cần quay đúng hai hướng; 18 nút báo đúng ô & $\checkmark$ Đạt & SIM-05, 08; mục~\ref{sec:camthat} \\
+Bảo mật thiết bị, phân quyền người dùng, xóa dữ liệu sau 10 ngày & $\checkmark$ Đạt & Kiểm thử \code{permissions}, SIM-16 \\
+Dựng và gỡ hạ tầng bằng script & $\checkmark$ Đạt & Mục~\ref{sec:trienkhaicloud} \\
+Tài liệu và hướng dẫn sử dụng & $\checkmark$ Đạt & Mục~\ref{sec:danhmuc} đến~\ref{sec:huongdan} \\
+\bottomrule
+\end{tabularx}
+\end{table}

@@ -1,78 +1,66 @@
-# Sơ đồ mô hình bãi xe: 2 tầng, mỗi tầng 3 × 3 ô
+# Sơ đồ bãi đỗ
 
-Đây là sơ đồ logic để bố trí mô hình và tính đường đi; kích thước thật của mô hình cần đo sau khi làm mặt bãi. ID ô được dùng thống nhất trong MQTT, API, web, OLED và email.
+## Mã ô
 
-## Quy ước
+Bãi có 2 tầng. Mỗi tầng có 3 hàng (A, B, C) và 3 cột (1, 2, 3), tổng cộng 18 ô. Mã ô có dạng `F<tầng>-<hàng><cột>`, ví dụ `F1-A1`, `F2-C3`. Hàng A gần cổng nhất. Mã ô dùng giống nhau ở mọi nơi: tin nhắn MQTT, API, web và email.
 
-- `F1` = tầng 1, `F2` = tầng 2; `A/B/C` = hàng gần đến xa; `1/2/3` = cột từ trái sang phải.
-- Có **18 ô**, mỗi ô một nút bấm giả lập nối thẳng vào GPIO của ESP32 `slots-01` (sơ đồ chân ở đầu `firmware/esp32-slot-sensors/src/main.cpp`).
-- Hai làn vào/ra riêng và hai cần chắn riêng, cùng nằm trong góc nhìn camera Pi.
-- Mũi tên thể hiện chiều xe đi trong mô hình. Đường lên tầng 2 là ram dốc tượng trưng; phần cứng có thể là hai mặt bãi xếp tầng.
-
-## Cổng và làn
+## Cổng
 
 ```text
-                          [1 CAMERA + PI 5]
-                    ROI vào             ROI ra
-                       ↓                   ↓
-       Đường đến  ──> [XE / TAY]       [XE / TAY] <── Đường ra
-                        │                   │
-                  [1 SERVO: trái = VÀO, phải = RA]
-                        │                   │
-                 [OLED chỉ ô]         [OLED hiện phí]
-                        │                   │
-                    ┌───┴───────────────────┴───┐
-                    │ TẦNG 1: lối đi một chiều │
-                    └──────────┬────────────────┘
-                               │ lên/xuống F2
-
-       Kiosk/laptop tại cổng vào hiển thị QR phiên lớn để khách quét.
-       Một OLED gắn ESP gate luân phiên hiện chỉ dẫn cổng vào/phí cổng ra.
+                     [ Raspberry Pi 5 + camera ]
+                 vùng làn vào          vùng làn ra
+                       |                    |
+  Đường đến  -->   [ làn vào ]          [ làn ra ]   <-- Đường ra
+                       \                    /
+                  [ 1 servo: quay trái = mở vào, quay phải = mở ra ]
+                                  |
+                           Tầng 1 của bãi
 ```
 
-**Lưu ý:** một OLED dùng chung cần ưu tiên thông báo sự kiện mới nhất và ghi rõ `VÀO`/`RA`; nếu hai làn hoạt động đồng thời, kiosk/web vẫn hiển thị thông tin theo phiên. Camera chỉ phát sự kiện khi có vật nằm ổn định trong đúng ROI; quản trị bấm Cho vào/Cho ra thì cần mới mở.
+Một camera nhìn cả hai làn: nửa trái khung hình là làn vào, nửa phải là làn ra. Màn hình QR (laptop hoặc máy tính bảng) đặt ở cổng vào.
 
-## Tầng 1
+## Tầng 1 và tầng 2
 
 ```text
-       Cổng vào → lối chính (A gần cổng nhất, C gần ram dốc nhất)
-                     cột 1         cột 2         cột 3
-  Hàng A          [F1-A1 *]     [F1-A2]       [F1-A3]
-                     │              │             │
-  Lối đi A ─────────────────────────────────────────────→
-  Hàng B          [F1-B1]       [F1-B2]       [F1-B3]
-                     │              │             │
-  Lối đi B ─────────────────────────────────────────────→
-  Hàng C          [F1-C1]       [F1-C2]       [F1-C3]
-                     │              │             │
-  Lối đi C ─────────────────────────────────────────────→ ram lên F2
+Tầng 1
+  Cổng vào
+     |      cột 1      cột 2      cột 3
+     |    [F1-A1]    [F1-A2]    [F1-A3]
+     +------------------------------------   lối đi A
+     |    [F1-B1]    [F1-B2]    [F1-B3]
+     +------------------------------------   lối đi B
+     |    [F1-C1]    [F1-C2]    [F1-C3]
+     +------------------------------------>  lối đi C, cuối lối là dốc lên tầng 2
 
-  Mỗi ô một nút bấm giả lập.
+Tầng 2 (giống tầng 1, đi vào từ đầu dốc)
+     |    [F2-A1]    [F2-A2]    [F2-A3]
+     +------------------------------------   lối đi A
+     |    [F2-B1]    [F2-B2]    [F2-B3]
+     +------------------------------------   lối đi B
+     |    [F2-C1]    [F2-C2]    [F2-C3]
+     +------------------------------------   lối đi C
 ```
 
-## Tầng 2
+Lối chính chạy dọc bên trái. Mỗi hàng có một lối đi ngang ngay dưới hàng ô.
 
-```text
-       Từ ram tầng 1 → lối chính tầng 2
-                     cột 1         cột 2         cột 3
-  Hàng A          [F2-A1]       [F2-A2]       [F2-A3]
-                     │              │             │
-  Lối đi A ─────────────────────────────────────────────→
-  Hàng B          [F2-B1]       [F2-B2]       [F2-B3]
-                     │              │             │
-  Lối đi B ─────────────────────────────────────────────→
-  Hàng C          [F2-C1]       [F2-C2]       [F2-C3]
-                     │              │             │
-  Lối đi C ─────────────────────────────────────────────→ ram xuống F1/cổng ra
+## Gợi ý ô và đường đi
 
-  Tất cả 9 ô tầng 2: nút bấm giả lập.
-```
+Hệ thống không giữ ô cho xe nào. Ô chỉ để chỉ chỗ trống.
 
-## Ánh xạ 18 nút → GPIO (ESP32 thường, `slots-01`)
+- Ô gợi ý là ô trống đầu tiên theo thứ tự F1-A1 đến F1-C3, rồi F2-A1 đến F2-C3. Ô gợi ý được tính lại mỗi lần khách mở trang.
+- Khách chạm vào ô trống khác trên bản đồ để chọn.
+- Đường đi: từ cổng vào đi theo lối chính bên trái, tới lối của hàng thì rẽ phải, đi tới cột của ô rồi vào ô.
+- Ô ở tầng 2: ở tầng 1 đi hết lối C, lên dốc, rồi ở tầng 2 đi như tầng 1.
+
+Ví dụ chỉ dẫn cho ô `F2-C3`: "Qua cổng vào, đi theo lối chính bên trái đến cuối lối C. Đi hết lối C, lên dốc lên tầng 2. Tầng 2: đi theo lối chính, rẽ phải vào lối đi hàng C. Ô F2-C3 ở cột 3."
+
+Nếu không còn ô trống, trang báo bãi đầy. Nếu bo mạch 18 nút mất kết nối, trang không gợi ý nhưng khách vẫn chọn được ô.
+
+## Nối 18 nút vào ESP32 (`slots-01`)
 
 | Ô | GPIO | Ô | GPIO |
 |---|---|---|---|
-| F1-A1 | 25 | F2-A1 | 17 |
+| F1-A1 | 25 | F2-A1 | 17 (in là `TX2` trên một số board) |
 | F1-A2 | 26 | F2-A2 | 18 |
 | F1-A3 | 27 | F2-A3 | 19 |
 | F1-B1 | 32 | F2-B1 | 21 |
@@ -80,23 +68,11 @@
 | F1-B3 | 4 | F2-B3 | 23 |
 | F1-C1 | 13 | F2-C1 | 5 |
 | F1-C2 | 14 | F2-C2 | 15 |
-| F1-C3 | 16 | F2-C3 | 12 |
+| F1-C3 | 16 (in là `RX2` trên một số board) | F2-C3 | 12 |
 
-Mỗi nút một chân vào GPIO, chân kia vào GND; firmware bật pull-up trong chip (nhả = HIGH, nhấn = LOW). Chân chưa cắm nút đọc HIGH nên coi như chưa nhấn. Không cắm nút vào GPIO 0/2 (BOOT, LED), 1/3 (UART), 6–11 (flash), 34–39 (không có pull-up). Không giữ nút F2-C2/F2-C3 (GPIO 15/12, chân strapping) lúc cấp nguồn. Firmware lưu map này cố định, không suy diễn từ thứ tự topic.
+Mỗi nút một chân vào GPIO, chân kia vào GND. Nhấn một lần là ô đổi giữa trống và có xe. Chân chưa cắm nút thì coi như ô trống, nên có thể cắm nút dần.
 
-## Gợi ý ô và vẽ đường đi
-
-Hệ thống **không gán ô** cho xe; ô chỉ để chỉ chỗ trống.
-
-1. Ô gợi ý = ô `AVAILABLE` đầu tiên theo thứ tự F1-A1…F1-C3 rồi F2-A1…F2-C3 (gần cổng trước), tính lại mỗi lần khách mở trang QR/kiosk. Không còn ô trống → "Bãi đang đầy"; board ô offline → không gợi ý, khách tự chọn.
-2. Trang QR cho khách chạm chọn ô trống bất kỳ (hoặc ô `UNKNOWN` khi board offline).
-3. Đường đi (web vẽ bằng SVG, email ghi bằng chữ), khớp sơ đồ trên:
-   - Từ **cổng vào** (góc trái trên) đi theo **lối chính bên trái** xuống tới lối đi của hàng ô đích;
-   - rẽ phải theo lối đi ngang (ngay dưới hàng ô) tới cột của ô, rồi vào ô.
-   - Ô **tầng 2**: tầng 1 đi hết lối C tới **ram lên tầng 2** (ghi "đi tiếp lên tầng 2"); tầng 2 đi từ đầu ram theo lối chính bên trái như tầng 1.
-4. Chỉ dẫn chữ, ví dụ:
-   - `F1-B2`: "Qua cổng vào, đi theo lối chính bên trái → Rẽ phải vào lối đi hàng B → Ô F1-B2 ở cột 2, phía trên lối đi."
-   - `F2-C3`: "… đến cuối lối C → Đi hết lối C, LÊN RAM lên tầng 2 → Tầng 2: … rẽ phải vào lối đi hàng C → Ô F2-C3 ở cột 3."
-5. OLED dùng bản rút gọn (`VAO: goi y F1-A2`, `Con 12 cho trong`).
-
-Sơ đồ là logic, chưa theo kích thước thật; không tuyên bố khoảng cách mét khi chưa đo bãi.
+Lưu ý:
+- Không giữ nút của ô F2-C2 và F2-C3 (GPIO 15 và 12) đúng lúc cắm điện hoặc nạp code.
+- Không dùng GPIO 0 và 2 (nút BOOT, đèn LED), 1 và 3 (cổng nạp code), 6 đến 11 (bộ nhớ flash).
+- GPIO 34 đến 39 không có điện trở kéo lên trong chip; nếu dùng thì phải thêm điện trở 10 kΩ lên 3V3.

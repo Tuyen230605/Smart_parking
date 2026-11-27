@@ -1,0 +1,116 @@
+\begin{thebibliography}{99}
+\addcontentsline{toc}{chapter}{Tài liệu tham khảo}
+\setlength{\itemsep}{2pt}
+\small
+\bibitem{iotmqtt} Amazon Web Services, \emph{AWS IoT Core Developer Guide --- MQTT}. \url{https://docs.aws.amazon.com/iot/latest/developerguide/mqtt.html}
+\bibitem{iotpolicy} Amazon Web Services, \emph{AWS IoT Core policies}. \url{https://docs.aws.amazon.com/iot/latest/developerguide/iot-policies.html}
+\bibitem{iotalpn} Amazon Web Services, \emph{Device communication protocols (MQTT over port 443 with ALPN)}. \url{https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html}
+\bibitem{iotrules} Amazon Web Services, \emph{Rules for AWS IoT}. \url{https://docs.aws.amazon.com/iot/latest/developerguide/iot-rules.html}
+\bibitem{lambda} Amazon Web Services, \emph{AWS Lambda Developer Guide}. \url{https://docs.aws.amazon.com/lambda/latest/dg/welcome.html}
+\bibitem{ddbtx} Amazon Web Services, \emph{Amazon DynamoDB Transactions}. \url{https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transactions.html}
+\bibitem{ddbttl} Amazon Web Services, \emph{Using Time to Live (TTL) in DynamoDB}. \url{https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html}
+\bibitem{apigw} Amazon Web Services, \emph{Controlling access to HTTP APIs with JWT authorizers}. \url{https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html}
+\bibitem{cognito} Amazon Web Services, \emph{Amazon Cognito user pools}. \url{https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools.html}
+\bibitem{ses} Amazon Web Services, \emph{Amazon SES --- Request production access (moving out of the sandbox)}. \url{https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html}
+\bibitem{oac} Amazon Web Services, \emph{Restricting access to an Amazon S3 origin (Origin Access Control)}. \url{https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html}
+\bibitem{cfnpkg} Amazon Web Services, \emph{AWS CLI Command Reference --- cloudformation package}. \url{https://docs.aws.amazon.com/cli/latest/reference/cloudformation/package.html}
+\bibitem{sam} Amazon Web Services, \emph{AWS Serverless Application Model (SAM) Specification}. \url{https://docs.aws.amazon.com/serverless-application-model/}
+\bibitem{pricing} Amazon Web Services, \emph{AWS Pricing Calculator}. \url{https://calculator.aws/}
+\bibitem{wellarch} Amazon Web Services, \emph{AWS Well-Architected Framework}. \url{https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html}
+\bibitem{picam} Raspberry Pi Ltd, \emph{The Picamera2 Library}. \url{https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf}
+\bibitem{mqttspec} OASIS, \emph{MQTT Version 3.1.1}. \url{https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html}
+\bibitem{repo} Mã nguồn đề tài. \url{https://github.com/Tuyen230605/Smart_parking}
+\end{thebibliography}
+
+\appendix
+\renewcommand{\thechapter}{\Alph{chapter}}
+\titleformat{\chapter}[display]{\bfseries\Large\centering}{PHỤ LỤC \thechapter}{6pt}{\Large\MakeUppercase}
+
+\chapter{Trình tự lệnh triển khai đầy đủ}
+
+\begin{lenh}
+# -- Laptop: làm một lần ----------------------------------------
+aws configure                 # vùng ap-southeast-1, định dạng json
+aws sts get-caller-identity
+git clone https://github.com/Tuyen230605/Smart_parking.git
+cd Smart_parking
+python3 -m venv .venv
+.venv/bin/pip install -r simulation/requirements.txt pytest "moto[dynamodb]"
+
+cd infra/aws
+./deploy.sh                   # hạ tầng + 18 ô + bảng giá
+./create-users.sh             # tài khoản admin, kiosk
+WIFI_SSID=<wifi> WIFI_PASS=<mật khẩu> ./provision-devices.sh
+./deploy-web.sh               # web lên S3 + CloudFront
+./setup-pi.sh oi@<ip-pi>      # mã + chứng chỉ + cài đặt trên Pi
+
+# -- Pi ------------------------------------------------------------
+cd ~/Cloud-Course/edge/raspberry-pi-vision
+journalctl -u pi-vision -f
+
+# -- ESP32 (mỗi bo mạch một lần) -----------------------------------
+cd firmware/esp32-gates && pio run -t upload
+cd firmware/esp32-slot-sensors && pio run -t upload
+
+# -- Kiểm thử ------------------------------------------------------
+cd backend && ../.venv/bin/python -m pytest -q tests
+
+# -- Kết thúc đồ án ------------------------------------------------
+cd infra/aws && ./destroy.sh
+\end{lenh}
+
+\chapter{Ví dụ tin nhắn MQTT}
+
+Lệnh mở cần (đám mây gửi ESP32):
+\begin{lenh}
+{"schema_version": 1, "message_type": "gate_command",
+ "command_id": "6ff2b85d-50bc-4ea4-94bd-5f3430d4cf55",
+ "target_device_id": "gate-01", "gate": "ENTRY", "action": "OPEN",
+ "session_id": "01J9F7VRW8MW6W1MJZCQNNMJZP",
+ "issued_at": "2026-11-25T09:00:02Z",
+ "expires_at": "2026-11-25T09:00:07Z"}
+\end{lenh}
+
+Phản hồi của cổng (ESP32 gửi đám mây):
+\begin{lenh}
+{"schema_version": 1, "message_type": "gate_telemetry",
+ "event_id": "c9ff7d15-b9fb-4318-8b5f-33989d5dd130",
+ "device_id": "gate-01",
+ "command_id": "6ff2b85d-50bc-4ea4-94bd-5f3430d4cf55",
+ "gate": "ENTRY", "state": "OPEN", "error_code": null,
+ "occurred_at": "2026-11-25T09:00:03Z"}
+\end{lenh}
+
+Trạng thái ô (một ô thay đổi):
+\begin{lenh}
+{"schema_version": 1, "message_type": "slot_changed",
+ "event_id": "af3cdb82-213e-4df2-9182-e13d08767231",
+ "device_id": "slots-01", "boot_id": "91270fd2-...", "seq": 101,
+ "occurred_at": "2026-11-25T09:01:00Z",
+ "slot_id": "F1-A1", "occupied": true, "source": "BUTTON"}
+\end{lenh}
+
+Danh sách xe (đám mây gửi Pi, kênh \code{vision/\allowbreak{}pi-01/\allowbreak{}lot}):
+\begin{lenh}
+{"schema_version": 1, "message_type": "lot_state",
+ "occurred_at": "2026-11-25T09:45:41.753Z",
+ "in_lot": ["11111", "22222"],
+ "pending_entry": ["33333"], "pending_exit": []}
+\end{lenh}
+
+\chapter{Chính sách IoT của thiết bị \code{pi-01}}
+
+Đây là ví dụ quyền tối thiểu. Pi chỉ được kết nối bằng đúng tên của mình, chỉ được gửi vào hai kênh của mình và chỉ được nhận kênh danh sách xe. Pi không nhận được lệnh mở cần và không đọc được kênh của thiết bị khác. Trong đoạn dưới, \code{A} là viết tắt của \code{arn:aws:iot:ap-southeast-1:<mã tài khoản>}, và \code{T} là viết tắt của \code{parking/v1/site-01}.
+
+\begin{lenh}
+{"Version": "2012-10-17", "Statement": [
+  {"Effect": "Allow", "Action": "iot:Connect",
+   "Resource": "A:client/pi-01"},
+  {"Effect": "Allow", "Action": "iot:Publish",
+   "Resource": ["A:topic/T/vision/pi-01/events",
+                "A:topic/T/devices/pi-01/status"]},
+  {"Effect": "Allow", "Action": "iot:Subscribe",
+   "Resource": "A:topicfilter/T/vision/pi-01/lot"},
+  {"Effect": "Allow", "Action": "iot:Receive",
+   "Resource": "A:topic/T/vision/pi-01/lot"}]}
+\end{lenh}

@@ -1,0 +1,124 @@
+\chapter{Phân tích yêu cầu}
+
+\section{Mục tiêu của hệ thống}
+
+Từ bài toán ở Chương~1, nhóm đặt ra các mục tiêu sau:
+
+\begin{enumerate}[label=M\arabic*.,leftmargin=1.1cm]
+  \item Xe đến cổng thì hệ thống nhận ra và báo cho nhân viên; nhân viên cho phép thì cần chắn mới mở.
+  \item Lái xe xem được chỗ trống và đường đi trên điện thoại, không phải cài ứng dụng hay đăng ký tài khoản.
+  \item Xe ra thì hệ thống tự tính tiền theo thời gian đỗ; nhân viên thu tiền mặt rồi mở cổng.
+  \item Người quản lý xem được từ xa: còn bao nhiêu chỗ, xe nào trong bãi, thiết bị nào hỏng.
+  \item Không dùng máy chủ tự quản lý; chi phí hằng tháng thấp.
+  \item Không lưu thông tin cá nhân của khách quá lâu.
+\end{enumerate}
+
+\section{Hiện trạng thiết bị và tài nguyên}
+
+\begin{table}[H]
+\centering
+\caption{Thiết bị và tài nguyên sẵn có}
+\label{tab:hientrang}
+\begin{tabularx}{\textwidth}{@{}P{3.4cm}L@{}}
+\toprule
+\textbf{Hạng mục} & \textbf{Hiện trạng và ảnh hưởng tới thiết kế} \\ \midrule
+Xử lý ảnh & Một Raspberry Pi~5 và một camera OV5647. \\
+Vi điều khiển & Một ESP32-S3, một ESP32, một servo SG90, 18 nút nhấn. Chưa có cảm biến xe ở từng ô, nên dùng nút nhấn để giả lập; một servo làm cần chắn chung cho hai làn. \\
+Mạng & Pi nối mạng qua dây LAN. Một số mạng chặn cổng MQTT 8883, nên thiết bị cần dùng được cổng 443. \\
+Tài khoản đám mây & Tài khoản AWS gói miễn phí, còn tín dụng khuyến mại. Ưu tiên dịch vụ trả theo mức dùng và đặt cảnh báo chi phí. \\
+Màn hình ở cổng & Dùng laptop hoặc máy tính bảng để hiện mã QR. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Các vấn đề cần làm rõ}
+
+Trước khi thiết kế, nhóm liệt kê các vấn đề cần trả lời và chọn cách giải quyết (Bảng~\ref{tab:qa}).
+
+\begin{longtable}{@{}P{0.8cm}P{4.8cm}P{8.5cm}@{}}
+\caption{Các vấn đề cần làm rõ và cách giải quyết}\label{tab:qa}\\
+\toprule
+\textbf{Mã} & \textbf{Vấn đề} & \textbf{Cách giải quyết và lý do} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Mã} & \textbf{Vấn đề} & \textbf{Cách giải quyết và lý do} \\ \midrule
+\endhead
+Q1 & Chỉ có một camera thì phân biệt xe vào và xe ra thế nào? & Hai làn nằm cạnh nhau trong khung hình. Chia khung hình làm hai vùng: có vật ở vùng trái là xe vào, vùng phải là xe ra. \\
+Q2 & Có cho hệ thống tự mở cổng không? & Không. Camera có thể báo nhầm, nên mỗi lượt vào, ra hiện trên trang quản trị và chỉ mở cần khi nhân viên bấm \emph{Cho vào} hoặc \emph{Cho ra}. \\
+Q3 & Có cần thanh toán trực tuyến không? & Chưa cần. Hệ thống tự tính tiền, nhân viên thu tiền mặt và xác nhận đã thu hoặc miễn phí. \\
+Q4 & Tính tiền thế nào? & Dưới 15 phút miễn phí; đến 60 phút 10.000~đ; mỗi giờ sau thêm 5.000~đ. Bảng giá lưu trong cơ sở dữ liệu và sửa được trên trang quản trị. \\
+Q5 & Gửi hướng dẫn cho khách qua kênh nào? & SMS tốn phí và cài ứng dụng thì bất tiện. Màn hình ở cổng hiện mã QR; khách quét để xem đường đi và có thể nhập email. \\
+Q6 & Có nhớ email của khách cho lần sau không? & Chỉ khi khách tự chọn. Khi đó lần sau xe vào hệ thống tự gửi hướng dẫn, và email luôn có link để hủy. \\
+Q7 & Lưu biển số, email bao lâu? & Tối đa 10 ngày, có tác vụ dọn dữ liệu chạy mỗi giờ. Email khách tự chọn ghi nhớ thì giữ tới khi khách hủy. \\
+Q8 & Có giữ sẵn một ô cho từng xe không? & Không, vì xe có thể không vào đúng ô đó. Hệ thống chỉ gợi ý ô trống gần nhất và vẽ đường đi; khách chọn ô khác được. \\
+Q9 & Chưa có cảm biến xe qua cổng và chưa đọc được biển số thì làm sao? & Nhân viên bấm \emph{Cho ra} thì mở cần và kết thúc phiên đỗ. Hệ thống cấp biển số demo (11111, 22222,\ldots) cho từng xe. \\
+Q10 & Kiểm soát chi phí thế nào? & Dùng kiến trúc không máy chủ; AWS Budgets gửi cảnh báo khi chi phí tháng vượt 5 USD. \\
+Q11 & Đặt hạ tầng ở vùng nào? & Singapore (\code{ap-southeast-1}), gần Việt Nam nên phản hồi nhanh. \\
+\bottomrule
+\end{longtable}
+
+\section{Đối tượng sử dụng}
+
+\begin{itemize}
+  \item Khách (lái xe): không cần tài khoản. Quét mã QR để xem ô trống gợi ý, tự chọn ô và xem đường đi, có thể nhập email.
+  \item Nhân viên quản trị: đăng nhập, xem danh sách xe trong bãi, bấm \emph{Cho vào}, \emph{Cho ra}, xác nhận thu tiền, sửa bảng giá, mở cần bằng tay khi cần.
+  \item Màn hình ở cổng (kiosk): tài khoản riêng, chỉ để hiện mã QR và bản đồ đường đi.
+  \item Thiết bị: Pi có camera (\code{pi-01}), ESP32-S3 điều khiển cần chắn (\code{gate-01}), ESP32 đọc 18 nút (\code{slots-01}).
+\end{itemize}
+
+\section{Yêu cầu chức năng}
+
+\begin{longtable}{@{}P{1.3cm}P{12.8cm}@{}}
+\caption{Yêu cầu chức năng}\label{tab:fr}\\
+\toprule
+\textbf{Mã} & \textbf{Mô tả} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Mã} & \textbf{Mô tả} \\ \midrule
+\endhead
+FR-01 & Phát hiện xe ở làn vào và làn ra bằng một camera, gửi sự kiện lên đám mây. Mỗi lần có xe chỉ gửi một sự kiện. \\
+FR-02 & Mỗi lượt vào, ra hiện trên trang quản trị. Chỉ mở cần khi nhân viên bấm \emph{Cho vào} hoặc \emph{Cho ra}. Danh sách xe trong bãi chỉ đổi sau thao tác này. \\
+FR-03 & Cần chắn quay đúng hướng (trái là vào, phải là ra) rồi tự về giữa. \\
+FR-04 & Màn hình ở cổng hiện mã QR riêng cho từng phiên đỗ. Trang của khách gợi ý ô trống gần nhất, cho chọn ô khác và vẽ đường đi từ cổng, kể cả bước lên tầng 2. \\
+FR-05 & Khách tùy chọn nhập email để nhận hướng dẫn, tối đa một email mỗi phiên đỗ; tùy chọn ghi nhớ email theo biển số để lần sau tự gửi, có link hủy. \\
+FR-06 & Cập nhật trạng thái 18 ô từ 18 nút giả lập cảm biến. Trạng thái ô chỉ dùng để chỉ chỗ trống. \\
+FR-07 & Tính tiền theo bảng giá khi camera thấy xe ở làn ra; số tiền chốt ngay lúc đó. \\
+FR-08 & Nhân viên xác nhận đã thu tiền hoặc miễn phí có lý do, rồi bấm \emph{Cho ra}: cần mở và phiên đỗ kết thúc. \\
+FR-09 & Cấp biển số demo: xe vào nhận số nhỏ nhất chưa dùng (11111, 22222,\ldots); xe ra là xe có số lớn nhất đang đỗ. \\
+FR-10 & Trang quản trị có danh sách xe trong bãi, thiết bị, cảnh báo, phiên đỗ, bảng giá, nút mở cần bằng tay. Trang camera trên Pi hiện cùng danh sách xe. \\
+FR-11 & Báo thiết bị mất kết nối sau 90 giây. Ô chuyển sang \emph{không rõ} khi bo mạch đọc nút mất kết nối; xe vẫn được cho vào. \\
+FR-12 & Ẩn và xóa biển số, email của khách trước mốc 10 ngày. \\
+FR-13 & Trang công khai hiện sơ đồ 18 ô, không lộ thông tin khách. \\
+\bottomrule
+\end{longtable}
+
+\section{Yêu cầu phi chức năng}
+
+\begin{longtable}{@{}P{1.5cm}P{3cm}P{9.6cm}@{}}
+\caption{Yêu cầu phi chức năng}\label{tab:nfr}\\
+\toprule
+\textbf{Mã} & \textbf{Nhóm} & \textbf{Mô tả} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Mã} & \textbf{Nhóm} & \textbf{Mô tả} \\ \midrule
+\endhead
+NFR-01 & Chi phí & Không thuê máy chủ chạy liên tục; trả theo mức dùng; có cảnh báo chi phí. \\
+NFR-02 & Bảo mật thiết bị & Mỗi thiết bị có chứng chỉ riêng và chỉ dùng được kênh tin nhắn của mình. Không đặt khóa truy cập AWS trên thiết bị. \\
+NFR-03 & Bảo mật ứng dụng & Trang quản trị phải đăng nhập và phân quyền theo nhóm. Link QR có chữ ký và hết hạn sau 15 phút. \\
+NFR-04 & Riêng tư & Thông tin định danh tồn tại tối đa 10 ngày; không ghi biển số, email vào log. \\
+NFR-05 & Độ tin cậy & Tin nhắn đến hai lần không tạo phiên đỗ trùng hay mở cần hai lần. Lệnh cũ quá 5 giây bị bỏ qua. \\
+NFR-06 & Nhất quán dữ liệu & Cho xe vào và khóa biển số làm trong một thao tác; một biển số chỉ có một phiên đỗ trong bãi. \\
+NFR-07 & Thời gian phản hồi & Từ lúc camera gửi sự kiện đến khi đám mây xử lý xong: dưới 2 giây. \\
+NFR-08 & Dễ vận hành & Dựng, cập nhật, gỡ toàn bộ hạ tầng bằng script. \\
+NFR-09 & Kết nối & Thiết bị vẫn kết nối được khi mạng chặn cổng 8883. \\
+NFR-10 & Mở rộng & Thêm thiết bị, thêm bãi mà không đổi kiến trúc. \\
+\bottomrule
+\end{longtable}
+
+\section{Ràng buộc và giả định}
+
+\begin{itemize}
+  \item Hệ thống chạy trên sa bàn 2 tầng, 18 ô (\code{F1-A1} đến \code{F2-C3}); cả 18 ô dùng nút nhấn giả lập cảm biến.
+  \item Camera chỉ phát hiện có vật trong làn, không đọc biển số; cần chỉnh vùng làn và độ nhạy tại chỗ.
+  \item Amazon SES đang ở chế độ thử (sandbox), chỉ gửi được tới địa chỉ đã xác minh.
+\end{itemize}

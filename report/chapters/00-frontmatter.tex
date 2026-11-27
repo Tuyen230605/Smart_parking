@@ -1,0 +1,98 @@
+% --- Trang bìa ------------------------------------------------------------
+\newgeometry{margin=2cm}
+\begin{titlepage}
+\thispagestyle{empty}
+\setlength{\fboxrule}{0.8pt}
+\setlength{\fboxsep}{0pt}
+\noindent\makebox[\linewidth][c]{\fbox{%
+\begin{minipage}[t][\dimexpr\textheight-0.3cm\relax][t]{\dimexpr\textwidth-0.6cm-2\fboxrule\relax}
+\centering
+\vspace*{0.65cm}
+{\bfseries\fontsize{14}{17}\selectfont ĐẠI HỌC QUỐC GIA HÀ NỘI\par}
+\vspace{0.15cm}
+{\bfseries\fontsize{17}{21}\selectfont \Truong\par}
+\vspace{0.15cm}
+{\bfseries\fontsize{12}{15}\selectfont \Khoa\par}
+
+\vspace{1.1cm}
+\includegraphics[width=3.4cm]{hinh/uet.png}\par
+
+\vspace{1.2cm}
+{\bfseries\fontsize{16}{20}\selectfont BÁO CÁO BÀI TẬP LỚN MÔN HỌC\par}
+
+\vspace{0.85cm}
+\begin{minipage}{0.92\linewidth}\centering
+{\bfseries\fontsize{15}{20}\selectfont\color{navy}
+HỆ THỐNG BÃI ĐỖ XE THÔNG MINH\\
+(SMART PARKING)\\
+TRÊN NỀN TẢNG ĐIỆN TOÁN ĐÁM MÂY AWS\par}
+\end{minipage}
+
+\vspace{1.8cm}
+\begin{minipage}{0.8\linewidth}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}P{4cm}l@{}}
+Học phần: & \HocPhan{} (\MaLop) \\
+Giảng viên: & \GVHD \\[0.3cm]
+Sinh viên thực hiện: & Đoàn Văn Tuyền -- 23020151 \\
+& Phạm Ngọc Hải Đăng -- 24022771 \\
+& Nguyễn Văn Khoa -- 23020829 \\
+& Lê Hoàng Vũ -- 23020898 \\
+\end{tabular}
+\end{minipage}
+
+\vfill
+{\bfseries \NoiNam\par}
+\vspace*{0.8cm}
+\end{minipage}%
+}}
+\end{titlepage}
+\restoregeometry
+
+\pagenumbering{roman}
+
+% --- Lời mở đầu -----------------------------------------------------------
+\chapter*{LỜI MỞ ĐẦU}
+\addcontentsline{toc}{chapter}{Lời mở đầu}
+
+Ngày nay, nhiều tổ chức không còn tự mua máy chủ và dựng phòng máy. Họ thuê tài nguyên trên đám mây, dùng bao nhiêu trả bấy nhiêu, cần thêm thì mở rộng. Cách làm này đặc biệt hợp với các hệ thống IoT (Internet vạn vật), nơi nhiều thiết bị nhỏ phải gửi dữ liệu liên tục và nhận lệnh điều khiển an toàn. Các dịch vụ dựng sẵn trên đám mây giúp một nhóm nhỏ làm được hệ thống như vậy mà không phải tự quản lý máy chủ.
+
+Đề bài yêu cầu dùng một nền tảng đám mây để triển khai một ứng dụng, đi theo đúng các bước của một dự án thực tế: nhận yêu cầu ban đầu, phân tích và lập kế hoạch, thống nhất kế hoạch, thiết kế, triển khai, kiểm thử và bàn giao.
+
+Nhóm chọn bài toán bãi đỗ xe thông minh. Mô hình có hai tầng, 18 ô. Camera phát hiện xe ở làn vào và làn ra. Một cần chắn quay được hai hướng, chỉ mở khi nhân viên cho phép trên web. 18 nút nhấn giả lập cảm biến có xe ở từng ô. Khách quét mã QR để xem chỗ trống và đường đi. Toàn bộ phần xử lý, lưu trữ, đăng nhập, gửi email và trang web chạy trên Amazon Web Services (AWS). Hạ tầng được dựng bằng mã và dòng lệnh, không bấm tay trên giao diện web.
+
+Báo cáo đi theo thứ tự các bước trên. Chương~1 giới thiệu đề tài và nhóm. Chương~2 phân tích yêu cầu. Chương~3 trình bày giải pháp và kế hoạch. Chương~4 là thiết kế chi tiết. Chương~5 và 6 trình bày phần triển khai và kiểm thử. Chương~7 là bàn giao. Chương~8 tổng kết.
+
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+% --- Từ viết tắt ----------------------------------------------------------
+\chapter*{DANH MỤC TỪ VIẾT TẮT}
+\addcontentsline{toc}{chapter}{Danh mục từ viết tắt}
+\begin{longtable}{@{}P{3cm}P{11.5cm}@{}}
+\toprule
+\textbf{Viết tắt} & \textbf{Ý nghĩa} \\ \midrule
+\endhead
+ACK & Acknowledgement --- bản tin xác nhận thiết bị đã thực hiện lệnh \\
+ALPN & Application-Layer Protocol Negotiation --- cho phép chạy MQTT qua cổng 443 \\
+API & Application Programming Interface \\
+AWS & Amazon Web Services \\
+CLI & Command Line Interface (AWS CLI v2) \\
+HMAC & Hash-based Message Authentication Code --- dùng ký token QR \\
+IAM & AWS Identity and Access Management \\
+IoT & Internet of Things --- Internet vạn vật \\
+JWT & JSON Web Token \\
+MQTT & Message Queuing Telemetry Transport \\
+MVP & Minimum Viable Product --- sản phẩm khả dụng tối thiểu \\
+OAC & Origin Access Control (CloudFront $\rightarrow$ S3) \\
+OCR & Optical Character Recognition --- nhận dạng ký tự (đọc biển số; hướng phát triển) \\
+QoS & Quality of Service (mức đảm bảo giao bản tin MQTT) \\
+QR & Quick Response code \\
+SAM & AWS Serverless Application Model \\
+SES & Amazon Simple Email Service \\
+TLS & Transport Layer Security \\
+TTL & Time To Live --- thời gian sống của bản ghi \\
+\bottomrule
+\end{longtable}

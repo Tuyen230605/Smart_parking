@@ -11,6 +11,19 @@ import cv2
 import numpy as np
 
 
+def crop(frame, roi):
+    """Cắt khung hình theo vùng tỉ lệ [x, y, rộng, cao] (giá trị 0–1)."""
+    h, w = frame.shape[:2]
+    x, y, rw, rh = roi
+    return frame[int(y * h):int((y + rh) * h), int(x * w):int((x + rw) * w)]
+
+
+def roi_to_pixels(roi, width, height):
+    """Đổi vùng tỉ lệ sang hai góc theo điểm ảnh, dùng để vẽ khung làn."""
+    x, y, rw, rh = roi
+    return (int(x * width), int(y * height)), (int((x + rw) * width), int((y + rh) * height))
+
+
 @dataclass
 class PresenceConfig:
     diff_threshold: int = 30     # độ lệch xám (0–255) để coi một điểm ảnh là "khác nền"

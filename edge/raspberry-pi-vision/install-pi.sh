@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Cài pi-vision lên Raspberry Pi 5: thư viện, venv, systemd unit theo user hiện tại.
 #   cd ~/Cloud-Course/edge/raspberry-pi-vision && ./install-pi.sh
-# KHÔNG tự bật service: dùng ./pi-mode.sh parking để nhường camera từ dự án Smart Lighting.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VENV="${VENV:-$HOME/venv-parking}"
@@ -13,9 +12,7 @@ sudo apt-get install -y python3-picamera2 python3-opencv python3-venv >/dev/null
 echo "→ venv $VENV"
 [ -d "$VENV" ] || python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/pip" install -q -r "$HERE/requirements.txt"
-(cd "$HERE" && "$VENV/bin/python" -m unittest -q test_detector)
-echo "→ tải model OCR (lần đầu ~30 MB)"
-(cd "$HERE" && "$VENV/bin/python" -c "from detector import PlateReader; assert PlateReader().engine, 'OCR chưa cài được'" 2>&1 | grep -v INFO || true)
+(cd "$HERE" && "$VENV/bin/python" -m unittest -q test_presence)
 
 [ -f "$HERE/config.local.toml" ] || echo "⚠ Chưa có config.local.toml — chạy infra/aws/copy-pi-certs.sh từ laptop"
 [ -f /etc/parking/certs/pi-01.private.key ] || echo "⚠ Chưa có cert trong /etc/parking/certs"
@@ -38,4 +35,5 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
-echo "✅ Cài xong. Bật: ./pi-mode.sh parking    Xem log: journalctl -u pi-vision -f"
+sudo systemctl enable --now pi-vision
+echo "✅ Cài xong, pi-vision đã chạy và tự bật khi khởi động. Xem log: journalctl -u pi-vision -f"

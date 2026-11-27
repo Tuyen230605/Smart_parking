@@ -1,53 +1,51 @@
-# Smart Parking — đồ án bãi đỗ xe thông minh
+# Smart Parking
 
-Mô hình bãi **2 tầng, 18 ô** kết hợp Raspberry Pi 5/camera, hai ESP32, AWS và một web app. Pi phát hiện **có xe ở làn vào/ra** (đưa tay/xe mô hình vào khung camera); ESP32 cổng điều khiển **một servo cần chắn 3 vị trí + OLED**; ESP32 ô đọc **18 nút bấm** để chỉ chỗ trống. Quản trị bấm **Cho vào / Cho ra** trên web thì cần mới mở; backend đánh biển số demo, gợi ý ô trống + vẽ đường đi trên trang QR, gửi email hướng dẫn (tùy chọn ghi nhớ email theo biển số) và tính phí mô phỏng lúc ra.
+Đồ án môn Điện toán đám mây (INT3319E_2): hệ thống bãi đỗ xe thông minh trên AWS, chạy trên một sa bàn 2 tầng, 18 ô.
 
-> **Dựng lên AWS: [docs/setup-guide.md](docs/setup-guide.md)** — backend, hạ tầng (CloudFormation), web, Pi, mock 2 ESP32 và firmware ESP32 đều đã có code chạy được.
+## Hệ thống làm gì
 
-## Đọc theo thứ tự
+1. Camera trên Raspberry Pi thấy có xe ở làn vào. Trang quản trị hiện "Chờ cho vào" kèm biển số demo (11111, 22222, ...).
+2. Nhân viên bấm *Cho vào*. Cần chắn (ESP32-S3 + servo) quay sang trái rồi tự đóng.
+3. Màn hình ở cổng hiện mã QR. Khách quét để xem ô trống gần nhất và đường đi trên bản đồ, có thể nhận hướng dẫn qua email.
+4. Camera thấy xe ở làn ra. Hệ thống tính tiền theo thời gian đỗ.
+5. Nhân viên thu tiền, bấm *Cho ra*. Cần quay sang phải, xe rời danh sách.
 
-| Tài liệu | Nội dung |
+18 nút nhấn trên sa bàn (nối vào một ESP32) giả lập cảm biến có xe ở từng ô, dùng để biết ô nào còn trống.
+
+## Thành phần
+
+| Thư mục | Nội dung |
 |---|---|
-| [docs/setup-guide.md](docs/setup-guide.md) | **Cài đặt từng bước**: AWS, web, Pi, mock ESP32, nạp firmware |
-| [PROJECT_PLAN.md](PROJECT_PLAN.md) | Mục tiêu, phạm vi, mốc và phân công 4 người |
-| [docs/architecture.md](docs/architecture.md) | Kiến trúc đầu cuối, phần mềm trên AWS, dữ liệu và quyết định thiết kế |
-| [docs/parking-layout.md](docs/parking-layout.md) | Sơ đồ hai làn, hai tầng, 18 ô và đường đi |
-| [docs/use-cases.md](docs/use-cases.md) | 10 kịch bản chi tiết: vào/ra, email, tính phí, lỗi, lưu 10 ngày |
-| [docs/mqtt-contract.md](docs/mqtt-contract.md) | Topic và JSON giữa Pi, ESP32, AWS |
-| [docs/api-contract.md](docs/api-contract.md) | API web khách/kiosk/quản trị và mô hình dữ liệu |
-| [docs/hardware-and-budget.md](docs/hardware-and-budget.md) | Linh kiện, đấu nối và giá tham khảo |
-| [docs/aws-deployment.md](docs/aws-deployment.md) | Tài nguyên AWS và thứ tự triển khai |
-| [docs/simulation-and-test-plan.md](docs/simulation-and-test-plan.md) | Mô phỏng 18 nút và nghiệm thu đầu cuối |
+| `infra/aws/` | Template CloudFormation và các script dựng hạ tầng bằng AWS CLI |
+| `backend/` | Mã Python cho 3 hàm Lambda, kèm kiểm thử |
+| `web/` | Ứng dụng React: sơ đồ bãi, kiosk QR, trang khách, trang quản trị |
+| `edge/raspberry-pi-vision/` | Chương trình phát hiện xe trên Pi và trang camera |
+| `firmware/esp32-gates/` | ESP32-S3 điều khiển cần chắn |
+| `firmware/esp32-slot-sensors/` | ESP32 đọc 18 nút |
+| `simulation/` | Chương trình giả lập thiết bị khi chưa có phần cứng |
+| `docs/` | Tài liệu thiết kế và hướng dẫn |
+| `report/` | Báo cáo LaTeX |
 
-DOCX gốc nằm tại thư mục gốc để tham khảo định hướng ban đầu. Tài liệu Markdown trên là thiết kế MVP đã cập nhật theo phạm vi phần cứng hiện tại; các số liệu Free Tier trong DOCX không dùng làm cam kết chi phí.
+## Đọc tài liệu theo thứ tự
 
-## Luồng chính
+1. [docs/setup-guide.md](docs/setup-guide.md): cài đặt từ đầu đến cuối.
+2. [docs/architecture.md](docs/architecture.md): kiến trúc và luồng xử lý.
+3. [docs/use-cases.md](docs/use-cases.md): các tình huống sử dụng.
+4. [docs/mqtt-contract.md](docs/mqtt-contract.md) và [docs/api-contract.md](docs/api-contract.md): định dạng tin nhắn giữa thiết bị, web và đám mây.
+5. [docs/parking-layout.md](docs/parking-layout.md): sơ đồ 18 ô và bảng chân nút.
+6. [docs/hardware-and-budget.md](docs/hardware-and-budget.md), [docs/aws-deployment.md](docs/aws-deployment.md), [docs/simulation-and-test-plan.md](docs/simulation-and-test-plan.md), [docs/team-tasks.md](docs/team-tasks.md).
 
-1. Pi thấy **có xe ở làn vào** → backend đánh biển demo (`11111`, `22222`… số nhỏ nhất chưa dùng) → trang **Phiên đỗ** hiện "Chờ cho vào".
-2. Quản trị bấm **Cho vào** → servo mở cần vào, xe vào **danh sách xe trong bãi** (hiện ở web Tổng quan và trang camera Pi).
-3. OLED hiện ô trống gợi ý; kiosk hiện **QR của phiên** kèm bản đồ. Khách quét QR, **chọn ô trống**, xem **đường đi vẽ từ cổng vào** (ô tầng 2 có bước lên ram), có thể nhập email (tùy chọn **ghi nhớ email cho biển số** để lần sau tự gửi). Ô chỉ để chỉ đường, không gán cho xe.
-4. Pi thấy **có xe ở làn ra** → backend chọn xe số lớn nhất, khóa phí demo → trang Phiên đỗ hiện "Chờ cho ra" + phí.
-5. Quản trị bấm **Cho ra** (thu tiền trước nếu có phí) → servo mở cần ra, xe rời danh sách, phiên đóng.
-6. Dữ liệu định danh (biển số, email lượt) không lưu quá 10 ngày; email đã ghi nhớ giữ tới khi khách hủy liên kết.
+## Lệnh nhanh
 
-## Cấu trúc repository
-
-```text
-docs/                       tài liệu hệ thống và hợp đồng
-edge/raspberry-pi-vision/   camera, phát hiện xe trong làn, trang xem camera
-firmware/esp32-gates/       1 servo cần chắn 3 vị trí, OLED (ESP32-S3)
-firmware/esp32-slot-sensors/ 18 nút bấm nối GPIO (ESP32 thường)
-backend/src/                Lambda Python: IoT handler, API, job giám sát/purge
-backend/tests/              kiểm thử nghiệp vụ với DynamoDB giả (moto)
-web/                        một app cho guest/kiosk/admin
-simulation/                 mock gate-01/slots-01 + kiểm thử đầu cuối trên AWS
-infra/aws/                  template CloudFormation + script deploy/cấp cert/xóa
+```bash
+cd infra/aws
+./deploy.sh              # dựng hạ tầng AWS
+./create-users.sh        # tài khoản admin, kiosk
+WIFI_SSID=... WIFI_PASS=... ./provision-devices.sh   # chứng chỉ cho 3 thiết bị
+./deploy-web.sh          # đưa web lên CloudFront
+./setup-pi.sh oi@<ip-pi> # cài chương trình lên Pi
 ```
 
-## Nguyên tắc triển khai
+Kiểm thử: `cd backend && ../.venv/bin/python -m pytest -q tests`.
 
-- Thống nhất schema v1 ở [MQTT](docs/mqtt-contract.md) và [API](docs/api-contract.md) trước khi viết firmware/backend.
-- Dựng mock thiết bị để web/backend chạy được khi chưa có sa bàn.
-- Không commit private key/certificate, AWS secret hoặc dữ liệu khách thật.
-- Web không điều khiển ESP trực tiếp; backend kiểm tra nghiệp vụ rồi mới phát lệnh.
-- Giữ tính phí ở chế độ mô phỏng và xác nhận thu tiền thủ công; không tự nhận là đã thanh toán online.
+Không commit khóa, chứng chỉ hay mật khẩu Wi-Fi. Các tệp này nằm trong `secrets/`, `*.local.*` và `include/secrets.h`, đã có trong `.gitignore`.

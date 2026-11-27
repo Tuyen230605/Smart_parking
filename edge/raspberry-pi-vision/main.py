@@ -13,11 +13,11 @@ import threading
 import time
 
 import cv2
+import numpy as np
 
 from camera import open_camera
 from cars import LotView
-from detector import crop, roi_to_pixels
-from presence import LanePresence, PresenceConfig
+from presence import LanePresence, PresenceConfig, crop, roi_to_pixels
 from preview import PreviewServer
 from publisher import Publisher
 from settings import load_config
@@ -116,12 +116,33 @@ def main():
     status_interval = cfg["mqtt"]["status_interval_s"]
     next_status = time.monotonic() + status_interval
     frames = 0
+    last_warn = -1e9
+    no_signal = np.zeros((480, 640, 3), np.uint8)
+
+    def no_signal_annotated(lot, last_event):
+        out = no_signal.copy()
+        cv2.putText(out, "KHONG CO HINH TU CAMERA", (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+        cv2.putText(out, "Kiem tra cap CSI / nguon. Van dung duoc nut Thu xe VAO/RA.", (40, 250),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        cv2.putText(out, lot.summary(), (40, 330), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
+        if last_event:
+            cv2.putText(out, last_event, (40, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        return out
+
     try:
         while running:
             started = time.monotonic()
             frame = camera.read()
             if frame is None:
-                log.warning("Không nhận được frame")
+                # Không có camera / camera treo: vẫn cập nhật trang xem trước, gửi status, phục vụ nút thử.
+                if time.monotonic() - last_warn > 30:
+                    log.warning("Không nhận được hình từ camera (kiểm tra cáp CSI và nguồn)")
+                    last_warn = time.monotonic()
+                if preview:
+                    preview.update(no_signal, no_signal_annotated(lot, last_event), cfg["preview"]["width"])
+                if started >= next_status:
+                    publisher.status("DEGRADED")
+                    next_status = started + status_interval
                 time.sleep(0.5)
                 continue
 

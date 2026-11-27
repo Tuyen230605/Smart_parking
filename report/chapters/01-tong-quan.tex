@@ -1,0 +1,48 @@
+\chapter{Tổng quan đề tài}
+
+\section{Đề bài}
+
+Đề bài yêu cầu dùng một nền tảng đám mây công cộng (ví dụ AWS) hoặc đám mây riêng (ví dụ OpenStack) để triển khai một ứng dụng như hệ thống giám sát, ứng dụng AI, phân tích dữ liệu hay IoT. Bài làm cần đi qua các bước của một dự án đưa ứng dụng lên đám mây: phân tích yêu cầu, đề xuất giải pháp và lập kế hoạch, thiết kế, triển khai, kiểm thử và bàn giao. Báo cáo được sắp xếp theo đúng thứ tự các bước này.
+
+\section{Thành viên và phân công}
+
+\begin{table}[H]
+\centering
+\caption{Thành viên và phân công}
+\label{tab:doinhom}
+\begin{tabularx}{\textwidth}{@{}P{4.2cm}P{2.2cm}P{2cm}L@{}}
+\toprule
+\textbf{Thành viên} & \textbf{MSSV} & \textbf{Đóng góp} & \textbf{Phần việc chính} \\ \midrule
+Đoàn Văn Tuyền & 23020151 & 31\,\% & Hạ tầng AWS (CloudFormation, IoT Core, triển khai bằng CLI), Raspberry Pi và camera \\
+Phạm Ngọc Hải Đăng & 24022771 & 23\,\% & Phần xử lý trên đám mây (Lambda, DynamoDB, API) \\
+Nguyễn Văn Khoa & 23020829 & 23\,\% & ESP32 đọc 18 nút giả lập cảm biến ô \\
+Lê Hoàng Vũ & 23020898 & 23\,\% & ESP32-S3 điều khiển cần chắn \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Bài toán}
+
+Nhóm chọn bài toán bãi đỗ xe ô tô hai tầng. Ở nhiều bãi xe hiện nay, mọi việc vẫn làm bằng tay: nhân viên ghi biển số vào sổ, phát vé giấy, tự tìm chỗ trống cho xe và tính tiền khi xe ra. Cách làm này có mấy vấn đề:
+
+\begin{itemize}
+  \item Giờ cao điểm, xe phải xếp hàng ở cổng vì nhân viên vừa ghi chép vừa chỉ chỗ.
+  \item Lái xe không biết chỗ trống ở đâu, phải chạy vòng tìm.
+  \item Tính tiền bằng tay dễ sai, vé giấy dễ mất.
+  \item Chủ bãi không biết tình hình bãi khi không có mặt.
+\end{itemize}
+
+Đề tài làm hệ thống trên một mô hình thu nhỏ (sa bàn 2 tầng, 18 ô), với chi phí đám mây thấp và không cần tự vận hành máy chủ.
+
+\section{Mục tiêu và phạm vi}
+
+Mục tiêu là xây dựng và chạy trên AWS một hệ thống bãi đỗ xe thông minh ở mức sản phẩm tối thiểu (MVP). Hệ thống phải chạy được trọn một vòng: xe đến làn vào, nhân viên cho vào và cần chắn mở; khách xem chỗ trống và đường đi; xe đến làn ra, hệ thống tính tiền, nhân viên thu tiền và cho ra.
+
+Hệ thống gồm ba tầng:
+\begin{itemize}
+  \item Tầng biên (thiết bị đặt tại bãi): Raspberry Pi 5 với camera phát hiện xe ở hai làn; ESP32-S3 điều khiển một cần chắn quay hai hướng; ESP32 đọc 18 nút nhấn giả lập cảm biến có xe ở 18 ô.
+  \item Tầng đám mây: các dịch vụ AWS, dựng bằng CloudFormation qua AWS CLI.
+  \item Tầng ứng dụng: một ứng dụng web dùng chung cho khách, màn hình ở cổng và nhân viên quản trị.
+\end{itemize}
+
+Ngoài phạm vi: thanh toán trực tuyến, đọc biển số thật (hệ thống dùng biển số demo), cảm biến xe thật ở từng ô, ứng dụng di động, nhiều bãi xe.

@@ -1,0 +1,171 @@
+\chapter{Triển khai}
+
+\section{Môi trường và công cụ}
+
+\begin{table}[H]
+\centering
+\caption{Môi trường triển khai}
+\label{tab:moitruong}
+\begin{tabularx}{\textwidth}{@{}P{3.5cm}L@{}}
+\toprule
+\textbf{Thành phần} & \textbf{Công nghệ, phiên bản} \\ \midrule
+Đám mây & AWS, vùng Singapore (\code{ap-southeast-1}), tài khoản gói miễn phí \\
+Công cụ triển khai & AWS CLI v2, CloudFormation kèm SAM, script Bash \\
+Phần xử lý trên đám mây & Python 3.12 chạy trên Lambda chip ARM, thư viện \code{boto3} \\
+Web & React, TypeScript, Vite, thư viện tạo mã QR \\
+Raspberry Pi & Raspberry Pi 5, Raspberry Pi OS (Python 3.13), thư viện camera \code{picamera2}, OpenCV, thư viện MQTT \code{paho-mqtt}, dịch vụ systemd \\
+Phần mềm ESP32 & PlatformIO, nền Arduino (ESP32-S3 cho cổng, ESP32 cho ô); thư viện MQTT, ArduinoJson, ESP32Servo \\
+Kiểm thử & \code{pytest} và \code{moto} (giả lập DynamoDB trên máy), các chương trình mô phỏng thiết bị \\
+Quản lý mã nguồn & Git, GitHub (nhánh \code{main}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Tổ chức mã nguồn}
+
+\begin{lenh}
+backend/src/        3 Lambda: core, services, logic, iot_handler,
+                    api_handler, jobs
+backend/tests/      16 kịch bản kiểm thử với DynamoDB giả lập
+infra/aws/          template.yaml và các script: deploy, create-users,
+                    provision-devices, deploy-web, setup-pi,
+                    copy-pi-certs, destroy
+edge/raspberry-pi-vision/   chương trình phát hiện xe, trang camera,
+                            install-pi.sh
+firmware/esp32-gates/       ESP32-S3: cần chắn hai hướng
+firmware/esp32-slot-sensors/ ESP32: 18 nút giả lập cảm biến ô
+simulation/         chương trình mô phỏng thiết bị
+web/                ứng dụng React (/, /kiosk, /s/:mã, /admin)
+docs/               kiến trúc, quy ước tin nhắn và API, hướng dẫn cài
+\end{lenh}
+
+\section{Triển khai hạ tầng đám mây bằng dòng lệnh}
+\label{sec:trienkhaicloud}
+
+Toàn bộ hạ tầng được dựng bằng AWS CLI và script (yêu cầu NFR-08). Chỉ có hai việc bắt buộc làm tay một lần trên giao diện web của AWS:
+\begin{itemize}
+  \item Tạo tài khoản IAM dùng để triển khai, lấy khóa truy cập cho AWS CLI.
+  \item Mở email và bấm link xác minh địa chỉ gửi của Amazon SES.
+\end{itemize}
+
+\subsection*{Bước 1: cấu hình AWS CLI}
+Nhập khóa của tài khoản IAM bằng lệnh \code{aws configure}. Khóa này không đưa vào kho mã. Kiểm tra lại bằng \code{aws sts get-caller-identity}.
+
+\subsection*{Bước 2: dựng hạ tầng}
+\begin{lenh}
+cd infra/aws
+./deploy.sh   # lần đầu hỏi email gửi (SES) và email nhận cảnh báo chi phí
+\end{lenh}
+Script làm lần lượt các việc sau:
+\begin{enumerate}
+  \item Tạo kho S3 chứa gói mã Lambda (chặn truy cập công khai).
+  \item Lấy địa chỉ IoT Core riêng của tài khoản.
+  \item Đóng gói mã Lambda bằng \code{aws cloudformation package}.
+  \item Tạo hoặc cập nhật toàn bộ hạ tầng bằng \code{aws cloudformation deploy}.
+  \item Gọi Lambda \code{jobs} để tạo 18 ô và bảng giá.
+  \item Ghi địa chỉ API và thông tin Cognito vào cấu hình của web.
+\end{enumerate}
+Khóa dùng để ký link QR được sinh ngẫu nhiên một lần và lưu ở \code{secrets/\allowbreak{}deploy.env}. Lần đầu chạy mất khoảng 5--10 phút, chủ yếu do CloudFront. Chạy lại thì CloudFormation chỉ cập nhật phần thay đổi.
+
+\subsection*{Bước 3: tạo tài khoản quản trị và màn hình ở cổng}
+\begin{lenh}
+./create-users.sh   # tạo admin (nhóm ADMIN) và kiosk (nhóm KIOSK)
+\end{lenh}
+
+\subsection*{Bước 4: cấp chứng chỉ cho thiết bị}
+\begin{lenh}
+WIFI_SSID=<tên Wi-Fi> WIFI_PASS=<mật khẩu> ./provision-devices.sh
+\end{lenh}
+Với mỗi thiết bị (\code{pi-01}, \code{gate-01}, \code{slots-01}), script tạo IoT Thing, chứng chỉ X.509 kèm khóa riêng, và chính sách chỉ cho đúng kênh của thiết bị. Riêng \code{pi-01} được nhận thêm kênh danh sách xe. Script cũng sinh tệp cấu hình cho Pi (\code{config.local.toml}) và cho hai ESP32 (\code{secrets.h}). Chạy lại vẫn an toàn: thiết bị đã có chứng chỉ thì giữ nguyên, chỉ cập nhật chính sách. Cần truyền tên và mật khẩu Wi-Fi như trên; nếu không, Wi-Fi trong \code{secrets.h} sẽ bị thay bằng chữ mẫu.
+
+\subsection*{Bước 5: phát hành web}
+\begin{lenh}
+./deploy-web.sh   # build web, đồng bộ lên S3, làm mới CloudFront
+\end{lenh}
+Các tệp có mã băm trong tên được lưu đệm một năm. Riêng \code{index.html} không lưu đệm, nên mỗi lần phát hành người dùng thấy bản mới ngay.
+
+\subsection*{Kết quả}
+
+\begin{table}[H]
+\centering
+\caption{Kết quả triển khai}
+\label{tab:ketquadeploy}
+\begin{tabularx}{\textwidth}{@{}P{4cm}L@{}}
+\toprule
+\textbf{Đầu ra} & \textbf{Giá trị} \\ \midrule
+Vùng & \code{ap-southeast-1} (Singapore) \\
+Địa chỉ web & \code{https:/\allowbreak{}/\allowbreak{}d1tv8rz66qo2sh.cloudfront.net} \\
+Địa chỉ API & \code{https:/\allowbreak{}/\allowbreak{}objulp6fnh.execute-api.ap-southeast-1.amazonaws.com/\allowbreak{}v1} \\
+Lambda & \code{smart-parking-dev-iot}, \code{-api}, \code{-jobs} \\
+DynamoDB & 8 bảng \code{smart-parking-dev-*}; đã tạo 18 ô \\
+IoT & 3 Thing, 3 chứng chỉ, 3 chính sách; 1 IoT Rule \\
+Tài khoản & \code{admin} (ADMIN), \code{kiosk} (KIOSK) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Triển khai thiết bị}
+
+\subsection{Raspberry Pi 5}
+
+Chương trình phát hiện xe chạy trong môi trường Python riêng (\code{\textasciitilde/\allowbreak{}venv-parking}) và một dịch vụ systemd riêng.
+
+\begin{lenh}
+# Trên laptop: một lệnh làm hết các bước
+cd infra/aws && ./setup-pi.sh oi@<ip-pi>
+
+# Hoặc làm từng bước:
+git clone https://github.com/Tuyen230605/Smart_parking.git ~/Cloud-Course
+./copy-pi-certs.sh oi@<ip-pi>     # trên laptop: chép chứng chỉ qua SSH
+cd ~/Cloud-Course/edge/raspberry-pi-vision
+./install-pi.sh                   # trên Pi
+journalctl -u pi-vision -f        # chờ dòng "Đã kết nối MQTT"
+\end{lenh}
+
+Script \code{install-pi.sh} cài thư viện camera và OpenCV, tạo môi trường Python, chạy kiểm thử phần phát hiện xe và tạo dịch vụ \code{pi-vision}. Chứng chỉ nằm ở \code{/\allowbreak{}etc/\allowbreak{}parking/\allowbreak{}certs}, chỉ chủ tệp đọc được.
+
+Ở trường không có router, Pi được nối dây LAN thẳng vào laptop. Cổng LAN của laptop đặt ở chế độ \emph{chia sẻ} (\code{ipv4.method shared}). Khi đó laptop cấp địa chỉ \code{10.42.0.x} cho Pi và chia Internet đang có cho Pi.
+
+\subsection{Hai bo mạch ESP32}
+
+Giai đoạn đầu, hai bo mạch được thay bằng chương trình mô phỏng chạy trên laptop. Chương trình này dùng đúng chứng chỉ, tên kết nối, kênh tin nhắn và định dạng như bo mạch thật:
+
+\begin{lenh}
+.venv/bin/python simulation/mock_gate.py    # thay gate-01
+.venv/bin/python simulation/mock_slots.py   # thay slots-01
+\end{lenh}
+
+Sau đó nhóm nạp phần mềm thật cho hai bo mạch. Khi nạp chỉ cần tắt chương trình mô phỏng tương ứng, vì AWS IoT chỉ cho mỗi tên một kết nối. Phần đám mây không phải sửa gì.
+
+\begin{itemize}
+  \item ESP32-S3 \code{gate-01}: servo SG90 nối GPIO18, làm cần chắn hai hướng. Servo lấy nguồn 5~V riêng và nối chung GND với bo mạch.
+  \item ESP32 \code{slots-01}: 18 nút, mỗi ô một chân GPIO. Ví dụ ô F1-A1 nối chân 25, F1-A2 chân 26, F1-A3 chân 27. Bảng đủ 18 chân nằm trong \code{docs/\allowbreak{}parking-layout.md}.
+  \item Wi-Fi khai báo trong \code{include/\allowbreak{}secrets.h} (không đưa lên kho mã). ESP32 chỉ dùng được Wi-Fi 2,4~GHz. Với mạng không mật khẩu thì để trống phần mật khẩu.
+  \item Nạp bằng lệnh \code{pio run -t upload}. Hai bo mạch nên cắm vào hai nguồn riêng: cắm cả hai vào cùng một laptop có thể làm sụt nguồn.
+\end{itemize}
+
+\section{Sự cố và cách khắc phục}
+
+\begin{longtable}{@{}P{4.3cm}P{4.6cm}P{5.2cm}@{}}
+\caption{Sự cố gặp phải và cách xử lý}\label{tab:suco}\\
+\toprule
+\textbf{Hiện tượng} & \textbf{Nguyên nhân} & \textbf{Cách khắc phục} \\ \midrule
+\endfirsthead
+\toprule
+\textbf{Hiện tượng} & \textbf{Nguyên nhân} & \textbf{Cách khắc phục} \\ \midrule
+\endhead
+Lambda báo không tìm thấy mã sau lần triển khai đầu & Lệnh đóng gói bỏ qua đường dẫn mã khai báo chung, nên đóng gói nhầm thư mục & Khai báo đường dẫn mã cho từng hàm; triển khai lại, tạo đủ 18 ô \\
+Kiểm thử đầu cuối báo Pi chưa kết nối sau 15 giây & Mạng chậm, bắt tay TLS lâu & Chờ tối đa 45 giây; báo lỗi rõ ràng và gợi ý dùng cổng 443 \\
+Chương trình dừng khi khởi tạo camera & Camera OV5647 không có chức năng lấy nét tự động & Chỉ bật lấy nét khi camera hỗ trợ; thêm tùy chọn chọn cổng camera \\
+Lệnh \code{ping amazon.com} báo mất hết gói dù Pi có mạng & amazon.com chặn ping & Kiểm tra bằng \code{curl https:/\allowbreak{}/\allowbreak{}aws.amazon.com} và thử kết nối tới IoT Core \\
+Phần mềm ESP32 không biên dịch & Thư mục mã dùng chung không tự kéo thư viện Wi-Fi; tên biến \code{link} trùng một hàm hệ thống & Thêm lệnh \code{\#include <WiFi.h>}; đổi tên biến thành \code{net} \\
+ESP32 kết nối AWS xong lại bị ngắt sau khoảng 2 giây, lặp liên tục & Vòng đăng ký kênh chạy qua cả các ô trống của mảng, gửi đăng ký với tên kênh rỗng; AWS ngắt kết nối vì lỗi phía thiết bị & Chỉ đăng ký các kênh đã khai báo; thêm log mã lỗi khi mất kết nối \\
+ESP32 không vào được Wi-Fi điểm phát của điện thoại & Điểm phát đang ở băng 5~GHz & Đổi điểm phát sang 2,4~GHz \\
+Servo không quay dù log báo đã ra lệnh & Chân \code{5Vin} của ESP32-S3 không có điện khi cắm USB & Cấp 5~V riêng cho servo, nối chung GND; thêm bước quay thử khi khởi động \\
+Không SSH được vào Pi dù trang camera vẫn chạy & Dịch vụ SSH trên Pi bị treo & Khởi động lại Pi bằng nút nguồn \\
+Camera chỉ gửi được một khung hình rồi treo; ảnh bị sọc màu & Cáp camera cắm lỏng & Tắt Pi, cắm lại cáp camera cho chặt. Chương trình cũng được sửa để vẫn chạy khi tạm thời không có hình \\
+Pi tự tắt sau khi khởi động một lúc & Cáp camera cắm lỏng làm sụt nguồn; nguồn 5~V/3~A còn yếu & Cắm lại cáp camera; dùng nguồn 5~V/5~A cho Pi \\
+Bo mạch ESP32 khởi động lại liên tục khi cắm cùng ESP32-S3 vào laptop & Cổng USB không đủ điện cho hai bo mạch & Cắm mỗi bo mạch vào một nguồn riêng \\
+Tác vụ dọn dữ liệu mỗi giờ báo lỗi & Khi sửa mã, hàm dọn dữ liệu bị xóa nhầm & Khôi phục hàm, thêm kiểm thử SIM-16 để phát hiện sớm \\
+\bottomrule
+\end{longtable}
