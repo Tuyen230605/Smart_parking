@@ -2,20 +2,20 @@
 
 | Thành viên | MSSV | Đóng góp | Phần việc chính |
 |---|---|---|---|
-| Đoàn Văn Tuyền | 23020151 | 31% | Hạ tầng AWS (CloudFormation, IoT Core, triển khai bằng CLI), Raspberry Pi và camera |
+| Đoàn Văn Tuyền | 23020151 | 31% | Hạ tầng AWS, Raspberry Pi, web |
 | Phạm Ngọc Hải Đăng | 24022771 | 23% | Phần xử lý trên đám mây (Lambda, DynamoDB, API) |
-| Nguyễn Văn Khoa | 23020829 | 23% | ESP32 đọc 18 nút giả lập cảm biến ô |
-| Lê Hoàng Vũ | 23020898 | 23% | ESP32-S3 điều khiển cần chắn |
+| Nguyễn Văn Khoa | 23020829 | 23% | ESP32 đọc 18 nút giả lập cảm biến ô, tích hợp firmware |
+| Lê Hoàng Vũ | 23020898 | 23% | ESP32-S3 điều khiển cần chắn, tích hợp firmware |
 
 ## Phần việc theo thư mục
 
 | Thư mục | Người phụ trách |
 |---|---|
-| `infra/aws/`, `edge/raspberry-pi-vision/` | Tuyền |
+| `infra/aws/`, `edge/raspberry-pi-vision/`, `web/` | Tuyền |
 | `backend/` | Đăng |
-| `firmware/esp32-slot-sensors/` | Khoa |
-| `firmware/esp32-gates/` | Vũ |
-| `web/`, `docs/`, `report/` | Cả nhóm |
+| `firmware/esp32-slot-sensors/`, `firmware/common/` | Khoa |
+| `firmware/esp32-gates/`, `firmware/common/` | Vũ |
+| `docs/`, `report/` | Cả nhóm |
 
 ## Quy ước làm việc chung
 
